@@ -18,7 +18,7 @@ export default function MissionPage({ t }: MissionPageProps) {
       <div className="text-center space-y-4 p-8 bg-slate-900/50 rounded-2xl border border-slate-800 backdrop-blur">
         <div className="flex justify-center">
           <img
-            src="/src/assets/images/gainbusters_logo_1779817742514.png"
+            src="/favicon.png"
             alt="GainBusters Logo"
             className="w-32 h-32 rounded-2xl shadow-lg border-2 border-green-500/30 object-cover"
             referrerPolicy="no-referrer"

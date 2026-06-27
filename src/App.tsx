@@ -1635,7 +1635,7 @@ export default function App() {
             <div className="text-center space-y-2">
               <div className="flex justify-center mb-2">
                 <img
-                  src="/src/assets/images/gainbusters_logo_1779817742514.png"
+                  src="/favicon.png"
                   alt="GainBusters Logo"
                   className="w-20 h-20 rounded-2xl shadow-xl border border-slate-800/80 object-cover transform hover:scale-105 transition-transform duration-300"
                   referrerPolicy="no-referrer"
@@ -1819,7 +1819,7 @@ export default function App() {
           <div className="text-center space-y-2">
             <div className="flex justify-center mb-2">
               <img
-                src="/src/assets/images/gainbusters_logo_1779817742514.png"
+                src="/favicon.png"
                 alt="GainBusters Logo"
                 className="w-20 h-20 rounded-2xl shadow-xl border border-slate-800/80 object-cover transform hover:scale-105 transition-transform duration-300"
                 referrerPolicy="no-referrer"
@@ -1921,7 +1921,7 @@ export default function App() {
             <div className="text-center space-y-2">
               <div className="flex justify-center mb-2">
                 <img
-                  src="/src/assets/images/gainbusters_logo_1779817742514.png"
+                  src="/favicon.png"
                   alt="GainBusters Logo"
                   className="w-20 h-20 rounded-2xl shadow-xl border border-slate-800/80 object-cover transform hover:scale-105 transition-transform duration-300"
                   referrerPolicy="no-referrer"
@@ -2020,7 +2020,7 @@ export default function App() {
           <div className="text-center space-y-2">
             <div className="flex justify-center mb-2">
               <img
-                src="/src/assets/images/gainbusters_logo_1779817742514.png"
+                src="/favicon.png"
                 alt="GainBusters Logo"
                 className="w-20 h-20 rounded-2xl shadow-xl border border-slate-800/80 object-cover transform hover:scale-105 transition-transform duration-300"
                 referrerPolicy="no-referrer"
@@ -2087,7 +2087,7 @@ export default function App() {
         <div className="max-w-7xl mx-auto px-4 md:px-6 py-4 flex items-center justify-between gap-4">
           <div className="flex items-center gap-3">
             <img
-              src="/src/assets/images/gainbusters_logo_1779817742514.png"
+              src="/favicon.png"
               alt="GainBusters Emblem"
               className="w-10 h-10 rounded-xl object-cover border border-emerald-500/10 shadow"
               referrerPolicy="no-referrer"
