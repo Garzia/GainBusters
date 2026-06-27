@@ -8,6 +8,7 @@ import { translations } from './locales/index.ts';
 import { Currency, DBState, Account, Portfolio, Transaction, TransactionType } from './types.ts';
 import { encryptData, decryptData } from './utils/crypto.ts';
 import { saveFileHandleInIndexedDB, getFileHandleFromIndexedDB, clearFileHandleFromIndexedDB } from './utils/indexedDB.ts';
+import { syncPricesLocally } from './utils/syncPrices.ts';
 import MissionPage from './components/MissionPage.tsx';
 import ToolsPage from './components/ToolsPage.tsx';
 import { InflationPage } from './components/InflationPage.tsx';
@@ -762,20 +763,11 @@ export default function App() {
     setIsSyncingPrices(true);
     setSyncFeedback({ message: t.connectionToYahoo, type: 'info' });
     try {
-      const r = await fetch('/api/prices/sync', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ symbols: activeSymbols, force })
-      });
-      if (r.ok) {
-        const syncRes = await r.json();
-        setDb(prev => ({ ...prev, priceCache: syncRes.priceCache }));
-        setSyncFeedback({ message: t.quotesUpdatedSuccess, type: 'success' });
-        setTimeout(() => setSyncFeedback(null), 4000);
-      } else {
-        setSyncFeedback({ message: t.quotesSyncError, type: 'error' });
-        setTimeout(() => setSyncFeedback(null), 5000);
-      }
+      const updatedDb = await syncPricesLocally(activeSymbols, force, stateObj);
+      setDb(updatedDb);
+      saveDatabaseState(updatedDb);
+      setSyncFeedback({ message: t.quotesUpdatedSuccess, type: 'success' });
+      setTimeout(() => setSyncFeedback(null), 4000);
     } catch (err) {
       console.error('Price sync failed', err);
       setSyncFeedback({ message: t.quotesSyncConnectionFailed, type: 'error' });
