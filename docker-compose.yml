@@ -1,0 +1,18 @@
+version: '3.8'
+
+services:
+  gainbusters:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: gainbusters
+    ports:
+      - "3000:3000"
+    volumes:
+      # Persistent bind volume for your portfolios, transactions, and settings cache!
+      # On Synology NAS, the volume is usually under /volume1/docker/gainbusters
+      - ./data:/app/data
+    environment:
+      - NODE_ENV=production
+      - STORAGE_MODE=local
+    restart: unless-stopped

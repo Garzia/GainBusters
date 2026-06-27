@@ -1,0 +1,237 @@
+@import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800;900&family=JetBrains+Mono:wght@400;500;700&display=swap');
+@import "tailwindcss";
+
+@theme {
+  --font-sans: "Inter", ui-sans-serif, system-ui, sans-serif;
+  --font-mono: "JetBrains Mono", ui-monospace, SFMono-Regular, monospace;
+}
+
+@utility animate-fade-in {
+  animation: fadeIn 0.35s cubic-bezier(0.16, 1, 0.3, 1) forwards;
+}
+
+@keyframes fadeIn {
+  from {
+    opacity: 0;
+    transform: translateY(4px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+/* Custom retro styling enhancements */
+body {
+  text-rendering: optimizeLegibility;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+}
+
+/* HIGHLY POLISHED LIGHT MODE CSS VARIABILITY AND OVERRIDES */
+html:not(.dark) {
+  /* Elevate Tailwind colors dynamically for light background container cards and components */
+  --color-slate-950: #f8fafc; /* Formerly pitch black, now clean light gray bg */
+  --color-slate-900: #ffffff; /* Formerly dark gray, now elegant crisp white card bg */
+  --color-slate-800: #e2e8f0; /* Formerly dark card borders, now soft modern light border */
+  --color-slate-700: #cbd5e1; /* Interactive soft borders */
+  --color-slate-600: #64748b; /* Muted text styling */
+  --color-slate-500: #475569; /* Mildly descriptive headers */
+  --color-slate-400: #334155; /* Body paragraph text overlay */
+  --color-slate-300: #1e293b; /* Prominent reading subtitles */
+  --color-slate-200: #0f172a; /* High-contrast main headings */
+  --color-slate-100: #01040a; /* Maximum-weight titles & tags */
+
+  /* Improve text readability of green/rose indicators in light mode (since standard green-400/rose-400 are too bright for white backgrounds) */
+  --color-emerald-400: #059669; /* Emerald-600 */
+  --color-emerald-500: #047857; /* Emerald-700 */
+  --color-emerald-600: #065f46; /* Emerald-800 */
+  
+  --color-green-400: #059669;
+  --color-green-500: #047857;
+  --color-green-600: #065f46;
+  
+  --color-rose-400: #be123c; /* Rose-700 */
+  --color-rose-500: #9f1239; /* Rose-800 */
+  --color-rose-600: #881337; /* Rose-900 */
+
+  /* Set overall body elements and overrides */
+  color-scheme: light;
+}
+
+/* Match general hex arbitrary background utilities */
+html:not(.dark) .bg-\[\#04060b\],
+html:not(.dark) [class*="bg-[#04060b]"] {
+  background-color: #f1f5f9 !important; /* Soft slate-100 overall canvas */
+  color: #0f172a !important;
+}
+
+html:not(.dark) .bg-\[\#070b16\/70\],
+html:not(.dark) .bg-\[\#070b16\],
+html:not(.dark) [class*="bg-[#070b16]"] {
+  background-color: rgba(255, 255, 255, 0.85) !important;
+  border-color: #e2e8f0 !important;
+}
+
+html:not(.dark) .bg-\[\#070c17\/60\],
+html:not(.dark) .bg-\[\#070c17\],
+html:not(.dark) [class*="bg-[#070c17]"] {
+  background-color: rgba(241, 245, 249, 0.85) !important;
+  border-color: #cbd5e1 !important;
+}
+
+/* Explicit text color remapping for light mode UI card titles which are styled with text-white */
+html:not(.dark) .text-white {
+  color: #020617 !important;
+}
+
+/* Ensure inputs, select forms, and textarea boxes have high readability dark text in light mode */
+html:not(.dark) input,
+html:not(.dark) select,
+html:not(.dark) textarea {
+  color: #0a0f1d !important;
+  background-color: #ffffff !important;
+  border-color: #cbd5e1 !important;
+}
+
+/* Also override if they have the text-white helper directly */
+html:not(.dark) input.text-white,
+html:not(.dark) select.text-white,
+html:not(.dark) textarea.text-white,
+html:not(.dark) select select {
+  color: #0a0f1d !important;
+}
+
+/* Secure readable browser option styling inside select elements */
+html:not(.dark) option,
+html:not(.dark) select option {
+  color: #0a0f1d !important;
+  background-color: #ffffff !important;
+}
+
+html:not(.dark) input::placeholder,
+html:not(.dark) textarea::placeholder {
+  color: #64748b !important;
+}
+
+/* Keep solid-colored active buttons and badges with white text (e.g., emerald or rose solid buttons) */
+html:not(.dark) .bg-emerald-600,
+html:not(.dark) .bg-emerald-500,
+html:not(.dark) .bg-green-600,
+html:not(.dark) .bg-rose-600,
+html:not(.dark) .bg-red-600,
+html:not(.dark) .bg-blue-600,
+html:not(.dark) button.bg-emerald-600,
+html:not(.dark) button.bg-rose-600,
+html:not(.dark) button.bg-green-600,
+html:not(.dark) button.bg-red-600,
+html:not(.dark) button.bg-blue-600 {
+  color: #ffffff !important;
+}
+
+html:not(.dark) .bg-emerald-600 *,
+html:not(.dark) .bg-emerald-500 *,
+html:not(.dark) .bg-green-600 *,
+html:not(.dark) .bg-rose-600 *,
+html:not(.dark) .bg-red-600 *,
+html:not(.dark) .bg-blue-600 *,
+html:not(.dark) button.bg-emerald-600 *,
+html:not(.dark) button.bg-rose-600 *,
+html:not(.dark) button.bg-green-600 *,
+html:not(.dark) button.bg-red-600 *,
+html:not(.dark) button.bg-blue-600 * {
+  color: #ffffff !important;
+}
+
+/* Ensure hovered state on solid buttons also retains white text */
+html:not(.dark) .bg-emerald-600:hover,
+html:not(.dark) .bg-emerald-500:hover,
+html:not(.dark) .bg-green-600:hover,
+html:not(.dark) .bg-rose-600:hover,
+html:not(.dark) .bg-red-600:hover,
+html:not(.dark) .bg-blue-600:hover,
+html:not(.dark) .bg-emerald-600:hover *,
+html:not(.dark) .bg-emerald-500:hover *,
+html:not(.dark) .bg-green-600:hover *,
+html:not(.dark) .bg-rose-600:hover *,
+html:not(.dark) .bg-red-600:hover *,
+html:not(.dark) .bg-blue-600:hover * {
+  color: #ffffff !important;
+}
+
+/* Muted buttons, inactive buttons, menus, and table headers on hover must stay legible (dark slate text, NOT white) */
+html:not(.dark) .hover\:text-white:hover:not(.bg-emerald-600):not(.bg-emerald-500):not(.bg-green-600):not(.bg-rose-600):not(.bg-red-600):not(.bg-blue-600),
+html:not(.dark) [class*="hover:text-white"]:hover:not(.bg-emerald-600):not(.bg-emerald-500):not(.bg-green-600):not(.bg-rose-600):not(.bg-red-600):not(.bg-blue-600),
+html:not(.dark) .hover\:text-slate-100:hover:not(.bg-emerald-600):not(.bg-rose-600),
+html:not(.dark) [class*="hover:text-slate-100"]:hover:not(.bg-emerald-600):not(.bg-rose-600),
+html:not(.dark) .hover\:text-slate-200:hover:not(.bg-emerald-600):not(.bg-rose-600),
+html:not(.dark) [class*="hover:text-slate-200"]:hover:not(.bg-emerald-600):not(.bg-rose-600) {
+  color: #0f172a !important;
+}
+
+/* For visual elements styled with text-slate-400 group-hover rules */
+html:not(.dark) .group-hover\:text-emerald-400:hover,
+html:not(.dark) .group:hover .group-hover\:text-emerald-400 {
+  color: #059669 !important;
+}
+
+/* Visual polishing details for better card shadow depth on light backgrounds */
+html:not(.dark) .shadow-2xl,
+html:not(.dark) .shadow-xl {
+  shadow-color: rgba(0, 0, 0, 0.05) !important;
+  box-shadow: 0 10px 25px -5px rgba(0, 0, 0, 0.04), 0 8px 10px -6px rgba(0, 0, 0, 0.04) !important;
+}
+
+/* LIGHT MODE ACCESSIBILITY OVERRIDES FOR ACTIVE MENUS, SETTINGS, AND EMERALD BUTTON HIGHLIGHTS */
+html:not(.dark) .text-emerald-400,
+html:not(.dark) [class*="text-emerald-400"] {
+  color: #047857 !important; /* Highly readable dark emerald green */
+}
+
+html:not(.dark) .text-emerald-500,
+html:not(.dark) [class*="text-emerald-500"] {
+  color: #065f46 !important;
+}
+
+html:not(.dark) .bg-emerald-500\/10,
+html:not(.dark) [class*="bg-emerald-500/10"] {
+  background-color: rgba(5, 120, 87, 0.12) !important;
+  color: #047857 !important;
+}
+
+html:not(.dark) .border-emerald-500\/25,
+html:not(.dark) .border-emerald-500\/30,
+html:not(.dark) [class*="border-emerald-500/25"],
+html:not(.dark) [class*="border-emerald-500/30"] {
+  border-color: rgba(5, 120, 87, 0.35) !important;
+}
+
+/* Make sure active settings text inside active widgets is not white */
+html:not(.dark) .border-emerald-500\/30.text-emerald-400,
+html:not(.dark) .border-emerald-500\/25.text-emerald-400 {
+  color: #047857 !important;
+}
+
+/* FORCE REGULAR ACCESSIBILITY AND READABLE CONTRAST FOR LIGHT MODE HIGHLIGHTED ELEMENTS */
+html:not(.dark) .bg-emerald-500\/10,
+html:not(.dark) .bg-emerald-500\/10 *,
+html:not(.dark) [class*="bg-emerald-500/10"],
+html:not(.dark) [class*="bg-emerald-500/10"] *,
+html:not(.dark) .text-emerald-400,
+html:not(.dark) .text-emerald-400 *,
+html:not(.dark) [class*="text-emerald-400"],
+html:not(.dark) [class*="text-emerald-400"] * {
+  color: #045f46 !important; /* Deep highly readable forest green */
+}
+
+/* Ensure hovered versions of these highlights also stay clean and dark green, never turning white */
+html:not(.dark) .bg-emerald-500\/10:hover,
+html:not(.dark) .bg-emerald-500\/10:hover *,
+html:not(.dark) [class*="bg-emerald-500/10"]:hover,
+html:not(.dark) [class*="bg-emerald-500/10"]:hover * {
+  color: #034b37 !important;
+  background-color: rgba(4, 120, 87, 0.18) !important;
+}
+
+
+

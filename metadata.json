@@ -1,0 +1,6 @@
+{
+  "name": "GainBusters",
+  "description": "Cacciatore di Rendita - Gestore di portafoglio investimenti privato 100% autogestito (Self-Hosted) con indici inflattivi personali, calcolatore FIRE e PAC per Docker e NAS Synology.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
