@@ -1,20 +1,13 @@
 {
+  "buildCommand": "npm run build:vercel",
   "builds": [
     {
-      "src": "api/index.ts",
-      "use": "@vercel/node",
-      "config": {
-        "includeFiles": ["server.ts"]
-      }
-    },
-    {
-      "src": "package.json",
-      "use": "@vercel/static-build",
-      "config": { "distDir": "dist" }
+      "src": "api/dist/index.js",
+      "use": "@vercel/node"
     }
   ],
   "rewrites": [
-    { "source": "/api/(.*)", "destination": "/api/index.ts" },
+    { "source": "/api/(.*)", "destination": "/api/dist/index.js" },
     { "source": "/(.*)", "destination": "/index.html" }
   ]
 }
