@@ -1,11 +1,5 @@
 {
-  "buildCommand": "npm run build:vercel",
-  "builds": [
-    {
-      "src": "api/dist/index.js",
-      "use": "@vercel/node"
-    }
-  ],
+  "outputDirectory": "dist",
   "rewrites": [
     { "source": "/api/(.*)", "destination": "/api/dist/index.js" },
     { "source": "/(.*)", "destination": "/index.html" }
