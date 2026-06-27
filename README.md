@@ -1,5 +1,5 @@
 <div align="center">
-  <img src="./icon.svg" alt="GainBusters Logo" width="120" height="120" />
+  <img src="./icon.svg" alt="GainBusters Logo" width="100%" />
   <h1>GainBusters</h1>
   <p><strong>Private, Self-hosted Portfolio Manager & Multi-Currency Asset Tracker</strong></p>
 
