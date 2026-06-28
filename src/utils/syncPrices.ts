@@ -154,22 +154,43 @@ export async function syncPricesLocally(
 
     const allDates = getDatesBetween(oldestDateStr, todayStr);
     
-    if (!newPriceCache[symbol] || force) {
+    if (!newPriceCache[symbol]) {
       newPriceCache[symbol] = {};
+    }
+
+    if (force) {
+      // Clear only the last month of cache to force a refresh of recent data
+      const oneMonthAgo = new Date();
+      oneMonthAgo.setMonth(oneMonthAgo.getMonth() - 1);
+      const oneMonthAgoStr = oneMonthAgo.toISOString().split('T')[0];
+      
+      Object.keys(newPriceCache[symbol]).forEach(d => {
+        if (d >= oneMonthAgoStr) {
+          delete newPriceCache[symbol][d];
+        }
+      });
     }
 
     const missingDates = allDates.filter(d => !newPriceCache[symbol][d]);
 
     if (missingDates.length > 0) {
-      console.log(`Syncing ${missingDates.length} missing dates for ${symbol} starting from ${oldestDateStr}`);
+      // Find the earliest missing date and go back a few days to catch Friday closes if missing on a Monday
+      let fetchStartDateStr = missingDates[0];
+      const fetchStartObj = new Date(fetchStartDateStr);
+      fetchStartObj.setDate(fetchStartObj.getDate() - 7);
+      const optimizedStartStr = fetchStartObj.toISOString().split('T')[0];
+      // But don't go before the actual oldest transaction date
+      const finalFetchStartStr = optimizedStartStr > oldestDateStr ? optimizedStartStr : oldestDateStr;
+
+      console.log(`Syncing ${missingDates.length} missing dates for ${symbol}. Optimized fetch from ${finalFetchStartStr} to ${todayStr}`);
       
       let fetchedPrices: { [date: string]: number } = {};
       let fetchSuccessful = false;
 
       // 1. Try Yahoo Finance directly from client
       try {
-        fetchedPrices = await fetchYahooFinancePrices(symbol, oldestDateStr, todayStr);
-        fetchSuccessful = Object.keys(fetchedPrices).length > 2;
+        fetchedPrices = await fetchYahooFinancePrices(symbol, finalFetchStartStr, todayStr);
+        fetchSuccessful = Object.keys(fetchedPrices).length > 0;
         console.log(`Successfully fetched ${Object.keys(fetchedPrices).length} prices from Yahoo Finance for ${symbol}`);
       } catch (err) {
         console.error(`Yahoo Finance fetch failed for ${symbol}. Using random walk simulation generator fallback.`, err);
@@ -184,9 +205,14 @@ export async function syncPricesLocally(
         if (fetchSuccessful && fetchedPrices[date] !== undefined) {
           newPriceCache[symbol][date] = fetchedPrices[date];
           currentPriceValue = fetchedPrices[date];
-        } else if (fetchSuccessful) {
-          // Carry forward close price on holidays / weekends
-          newPriceCache[symbol][date] = currentPriceValue;
+        } else if (fetchSuccessful && date >= finalFetchStartStr) {
+          // Carry forward close price on holidays / weekends ONLY for dates within our fetched range
+          // For dates before our fetched range, we already have them in cache or they were handled
+          if (!newPriceCache[symbol][date]) {
+             newPriceCache[symbol][date] = currentPriceValue;
+          } else {
+             currentPriceValue = newPriceCache[symbol][date];
+          }
         } else if (newPriceCache[symbol][date] !== undefined) {
           // Pre-existing value
           currentPriceValue = newPriceCache[symbol][date];

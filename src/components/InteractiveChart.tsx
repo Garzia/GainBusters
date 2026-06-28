@@ -204,7 +204,9 @@ export default function InteractiveChart({
     return txDateStr >= firstDateStr && txDateStr <= lastDateStr;
   });
 
-  const periodInitialValue = renderBalances.length > 0 ? renderBalances[0].currentValue : 0;
+  const firstRenderDate = renderBalances.length > 0 ? renderBalances[0].date : '';
+  const firstIndexInDaily = dailyBalances.findIndex(b => b.date === firstRenderDate);
+  const periodInitialValue = firstIndexInDaily > 0 ? dailyBalances[firstIndexInDaily - 1].currentValue : 0;
   const periodFinalValue = renderBalances.length > 0 ? renderBalances[renderBalances.length - 1].currentValue : 0;
 
   const periodInvested = periodTransactions

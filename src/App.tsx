@@ -3089,6 +3089,9 @@ export default function App() {
                           <th className="py-3 px-4 cursor-pointer select-none hover:text-white transition" onClick={() => handleTxSort('price')}>
                             {t.priceLabel} {txSortField === 'price' ? (txSortAsc ? '▲' : '▼') : ''}
                           </th>
+                          <th className="py-3 px-4 select-none text-slate-400">
+                            {t.allOption === 'Tutti' ? 'Totale' : 'Total'}
+                          </th>
                           <th className="py-3 px-4 cursor-pointer select-none hover:text-white transition" onClick={() => handleTxSort('latestPrice')}>
                             {t.allOption === 'Tutti' ? 'Valore Attuale' : t.allOption === 'Todos' ? 'Valor Actual' : t.allOption === 'Tous' ? 'Valeur Actuelle' : t.allOption === '全部' ? '最新价值' : t.allOption === 'الكل' ? 'القيمة الحالية' : 'Current Value'} {txSortField === 'latestPrice' ? (txSortAsc ? '▲' : '▼') : ''}
                           </th>
@@ -3121,6 +3124,12 @@ export default function App() {
                                 {formatCurrency(convertValue(tx.price, tx.currency || 'EUR', selectedCurrency, tx.date), selectedCurrency)}
                                 {tx.currency && tx.currency !== selectedCurrency && (
                                   <span className="block text-[10px] text-slate-500 font-normal">Orig: {formatCurrency(tx.price, tx.currency)}</span>
+                                )}
+                              </td>
+                              <td className="py-2.5 px-4 text-slate-300 font-bold">
+                                {formatCurrency(convertValue(tx.price * tx.qty, tx.currency || 'EUR', selectedCurrency, tx.date), selectedCurrency)}
+                                {tx.currency && tx.currency !== selectedCurrency && (
+                                  <span className="block text-[10px] text-slate-500 font-normal">Orig: {formatCurrency(tx.price * tx.qty, tx.currency)}</span>
                                 )}
                               </td>
                               <td className="py-2.5 px-4">
@@ -3188,6 +3197,29 @@ export default function App() {
                           );
                         })}
                       </tbody>
+                      <tfoot className="border-t border-slate-700 bg-slate-900/60 font-mono text-[10px] font-black uppercase tracking-wider">
+                        <tr>
+                          <td colSpan={4} className="py-3 px-4 text-right text-slate-400 tracking-widest">{t.allOption === 'Tutti' ? 'Totali' : 'Totals'}:</td>
+                          <td className="py-3 px-4 text-slate-300">
+                            {getProcessedTransactions().reduce((sum, tx) => sum + (tx.type === 'BUY' ? tx.qty : -tx.qty), 0).toLocaleString()}
+                          </td>
+                          <td className="py-3 px-4 text-white"></td>
+                          <td className="py-3 px-4 text-slate-300">
+                            {formatCurrency(
+                              getProcessedTransactions().reduce((sum, tx) => sum + ((tx.type === 'BUY' ? 1 : -1) * convertValue(tx.price * tx.qty, tx.currency || 'EUR', selectedCurrency, tx.date)), 0),
+                              selectedCurrency
+                            )}
+                          </td>
+                          <td className="py-3 px-4 text-white"></td>
+                          <td className="py-3 px-4 text-rose-400">
+                            {formatCurrency(
+                              getProcessedTransactions().reduce((sum, tx) => sum + convertValue(tx.commission || 0, tx.commissionCurrency || tx.currency || 'EUR', selectedCurrency, tx.date), 0),
+                              selectedCurrency
+                            )}
+                          </td>
+                          <td colSpan={2} className="py-3 px-4"></td>
+                        </tr>
+                      </tfoot>
                     </table>
                   </div>
                 )}
