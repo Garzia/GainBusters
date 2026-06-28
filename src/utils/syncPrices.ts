@@ -45,7 +45,7 @@ function generateRandomWalk(
 }
 
 function fetchYahooFinancePrices(symbol: string, startDateStr: string, endDateStr: string): Promise<{ [date: string]: number }> {
-  return new Promise((resolve, reject) => {
+  return new Promise(async (resolve, reject) => {
     let adjustedSymbol = symbol.trim().toUpperCase();
     if (adjustedSymbol === 'BTC') adjustedSymbol = 'BTC-EUR';
     if (adjustedSymbol === 'ETH') adjustedSymbol = 'ETH-EUR';
@@ -56,46 +56,41 @@ function fetchYahooFinancePrices(symbol: string, startDateStr: string, endDateSt
     // Include full current day
     const endSec = Math.floor(new Date(endDateStr).getTime() / 1000) + 86400;
 
-    const url = `https://query1.finance.yahoo.com/v8/finance/chart/${encodeURIComponent(adjustedSymbol)}?period1=${startSec}&period2=${endSec}&interval=1d`;
-    console.log(`[Yahoo Finance Request] Fetching historical close and timestamp data for ${symbol} as ${adjustedSymbol}: ${url}`);
+    const proxyUrl = `/api/yahoo/${encodeURIComponent(adjustedSymbol)}?period1=${startSec}&period2=${endSec}&interval=1d`;
+    console.log(`[Yahoo Finance Request] Fetching historical close and timestamp data for ${symbol} as ${adjustedSymbol}: ${proxyUrl}`);
 
-    fetch(url, {
-      method: 'GET',
-      headers: {
-        'Accept': 'application/json',
+    try {
+      const res = await fetch(proxyUrl, { method: 'GET', headers: { 'Accept': 'application/json' } });
+      if (!res.ok) throw new Error(`Status ${res.status}`);
+      const parsedData = await res.json();
+      
+      const chart = parsedData?.chart;
+      const result = chart?.result?.[0];
+      if (!result) {
+        throw new Error(`Invalid Yahoo Finance chart response structure`);
       }
-    })
-      .then(res => {
-        if (!res.ok) throw new Error(`Yahoo Finance server returned status ${res.status}`);
-        return res.json();
-      })
-      .then(parsed => {
-        const chart = parsed?.chart;
-        const result = chart?.result?.[0];
-        if (!result) {
-          throw new Error(`Invalid Yahoo Finance chart response structure`);
+
+      const timestamps: number[] = result.timestamp || [];
+      const closeQuotes: (number | null)[] = result.indicators?.quote?.[0]?.close || [];
+      const priceMap: { [date: string]: number } = {};
+
+      let lastValidPrice = 0;
+      for (let i = 0; i < timestamps.length; i++) {
+        const ts = timestamps[i];
+        const price = closeQuotes[i];
+        const dateStr = new Date(ts * 1000).toISOString().split('T')[0];
+
+        if (price !== null && !isNaN(price) && price > 0) {
+          priceMap[dateStr] = Number(price.toFixed(4));
+          lastValidPrice = price;
+        } else if (lastValidPrice > 0) {
+          priceMap[dateStr] = Number(lastValidPrice.toFixed(4));
         }
-
-        const timestamps: number[] = result.timestamp || [];
-        const closeQuotes: (number | null)[] = result.indicators?.quote?.[0]?.close || [];
-        const priceMap: { [date: string]: number } = {};
-
-        let lastValidPrice = 0;
-        for (let i = 0; i < timestamps.length; i++) {
-          const ts = timestamps[i];
-          const price = closeQuotes[i];
-          const dateStr = new Date(ts * 1000).toISOString().split('T')[0];
-
-          if (price !== null && !isNaN(price) && price > 0) {
-            priceMap[dateStr] = Number(price.toFixed(4));
-            lastValidPrice = price;
-          } else if (lastValidPrice > 0) {
-            priceMap[dateStr] = Number(lastValidPrice.toFixed(4));
-          }
-        }
-        resolve(priceMap);
-      })
-      .catch(err => reject(err));
+      }
+      resolve(priceMap);
+    } catch (err) {
+      reject(err);
+    }
   });
 }
 

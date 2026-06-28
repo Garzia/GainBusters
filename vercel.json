@@ -1,6 +1,7 @@
 {
   "outputDirectory": "dist",
   "rewrites": [
+    { "source": "/api/yahoo/(.*)", "destination": "https://query1.finance.yahoo.com/v8/finance/chart/$1" },
     { "source": "/api/(.*)", "destination": "/api/dist/index.js" },
     { "source": "/(.*)", "destination": "/index.html" }
   ]
