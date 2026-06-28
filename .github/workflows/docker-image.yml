@@ -1,0 +1,37 @@
+name: Build and Push to Docker Hub
+
+on:
+  push:
+    branches: [ "main" ] # Cambia in "master" se la tua build parte da lì
+
+jobs:
+  build-and-push:
+    runs-on: ubuntu-latest
+
+    steps:
+    - name: Checkout del codice
+      uses: actions/checkout@v4
+
+    - name: Configura Node.js
+      uses: actions/setup-node@v4
+      with:
+        node-version: '20'
+
+    # Questo assicura che il package-lock.json esista e sia aggiornato per il "npm ci" dentro al Dockerfile
+    - name: Genera package-lock-only
+      run: npm install --package-lock-only
+
+    - name: Login su Docker Hub
+      uses: docker/login-action@v3
+      with:
+        username: ${{ secrets::DOCKERHUB_USERNAME }}
+        password: ${{ secrets::DOCKERHUB_TOKEN }}
+
+    - name: Build e Push dell'immagine Docker
+      uses: docker/build-push-action@v5
+      with:
+        context: .
+        file: ./Dockerfile
+        push: true
+        tags: |
+          ${{ secrets.DOCKERHUB_USERNAME }}/gainbusters:latest
