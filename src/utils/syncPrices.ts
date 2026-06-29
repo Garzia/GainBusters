@@ -15,34 +15,7 @@ function getDatesBetween(startDateStr: string, endDateStr: string): string[] {
 }
 
 // Generate continuous price charts matching user transactions & historical randomness
-function generateRandomWalk(
-  startPrice: number,
-  length: number,
-  symbol: string
-): number[] {
-  // Determine asset characteristics based on symbols
-  const isBond = symbol.toUpperCase().includes('VAGF') || symbol.toUpperCase().includes('AGG') || symbol.toUpperCase().includes('BOND');
-  const isBitcoin = symbol.toUpperCase().includes('BTC') || symbol.toUpperCase().includes('ETH') || symbol.toUpperCase().includes('CRYPTO');
-  const isCurrency = symbol.toUpperCase().includes('=X');
-  
-  // Annual stats
-  const drift = isBond ? 0.025 : isBitcoin ? 0.45 : isCurrency ? 0.0 : 0.082; // average annual returns
-  const vol = isBond ? 0.04 : isBitcoin ? 0.65 : isCurrency ? 0.02 : 0.155; // volatility
-  
-  const dt = 1 / 365;
-  const prices: number[] = [startPrice];
-  
-  for (let i = 1; i < length; i++) {
-    const prev = prices[i - 1];
-    // Geometric Brownian Motion formula
-    const rand = Math.sin(i * 0.4) * 0.5 + (Math.random() - 0.5) * 1.5; // deterministic + random mix for elegant wavy curves
-    const change = prev * (drift * dt + vol * Math.sqrt(dt) * rand);
-    let nextPrice = prev + change;
-    if (nextPrice <= 0.01) nextPrice = 0.01;
-    prices.push(Number(nextPrice.toFixed(4)));
-  }
-  return prices;
-}
+// (Removed random walk)
 
 function fetchYahooFinancePrices(symbol: string, startDateStr: string, endDateStr: string): Promise<{ [date: string]: number }> {
   return new Promise(async (resolve, reject) => {
@@ -192,13 +165,16 @@ export async function syncPricesLocally(
         fetchedPrices = await fetchYahooFinancePrices(symbol, finalFetchStartStr, todayStr);
         fetchSuccessful = Object.keys(fetchedPrices).length > 0;
         console.log(`Successfully fetched ${Object.keys(fetchedPrices).length} prices from Yahoo Finance for ${symbol}`);
+        if (!fetchSuccessful) {
+          throw new Error(`No data returned from Yahoo Finance for ${symbol}`);
+        }
       } catch (err) {
-        console.error(`Yahoo Finance fetch failed for ${symbol}. Using random walk simulation generator fallback.`, err);
+        console.error(`Yahoo Finance fetch failed for ${symbol}.`, err);
+        throw err; // Abort sync and let UI show the error
       }
 
       // Populate database for all dates
       let currentPriceValue = firstTxPrice;
-      const walk = generateRandomWalk(currentPriceValue, allDates.length, symbol);
 
       allDates.forEach((date, index) => {
         // If we fetched it from Yahoo, use that
@@ -217,16 +193,13 @@ export async function syncPricesLocally(
           // Pre-existing value
           currentPriceValue = newPriceCache[symbol][date];
         } else {
-          // Fallback to our aligned random walk
-          // We align the random walk with any known transactions unit prices!
+          // We align the cache with any known transactions unit prices
           const exactMatchTx = symbolTransactions.find(t => t.date.split('T')[0] === date);
           if (exactMatchTx) {
             newPriceCache[symbol][date] = exactMatchTx.price;
             currentPriceValue = exactMatchTx.price;
           } else {
-            // Take the random walk offset
-            const randomIncrement = walk[index] - walk[Math.max(0, index - 1)];
-            currentPriceValue = Math.max(0.01, Number((currentPriceValue + randomIncrement).toFixed(4)));
+            // Carry forward
             newPriceCache[symbol][date] = currentPriceValue;
           }
         }
