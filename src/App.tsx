@@ -3,7 +3,7 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import { translations } from './locales/index.ts';
 import { Currency, DBState, Account, Portfolio, Transaction, TransactionType } from './types.ts';
 import { encryptData, decryptData } from './utils/crypto.ts';
@@ -40,7 +40,11 @@ import {
   Coins,
   ChevronDown,
   Scale,
-  ShieldAlert
+  ShieldAlert,
+  Download,
+  Upload,
+  Database,
+  AlertTriangle
 } from 'lucide-react';
 
 const defaultInitialDB: DBState = {
@@ -196,6 +200,10 @@ export default function App() {
 
   // Legal disclaimer modal state
   const [showLegalDisclaimerModal, setShowLegalDisclaimerModal] = useState<boolean>(false);
+
+  // Backup & Restore state
+  const [pendingImport, setPendingImport] = useState<DBState | null>(null);
+  const fileInputRef = useRef<HTMLInputElement>(null);
 
   // ================= REACT LIFE FLOWS =================
 
@@ -2069,6 +2077,107 @@ export default function App() {
     );
   }
 
+  // ================= BACKUP & RESTORE =================
+  const handleExportDatabase = () => {
+    const dataStr = JSON.stringify(db, null, 2);
+    const dataUri = 'data:application/json;charset=utf-8,'+ encodeURIComponent(dataStr);
+    
+    const exportFileDefaultName = `gainbusters_backup_${new Date().toISOString().split('T')[0]}.json`;
+    
+    const linkElement = document.createElement('a');
+    linkElement.setAttribute('href', dataUri);
+    linkElement.setAttribute('download', exportFileDefaultName);
+    linkElement.click();
+  };
+
+  const handleFileSelect = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+
+    const reader = new FileReader();
+    reader.onload = (event) => {
+      try {
+        const result = event.target?.result;
+        if (typeof result === 'string') {
+          const parsed = JSON.parse(result);
+          // Basic validation
+          if (parsed && (parsed.settings || parsed.accounts || parsed.portfolios || parsed.transactions)) {
+            setPendingImport(parsed);
+          } else {
+            alert(t.invalidBackupFile);
+          }
+        }
+      } catch (err) {
+        alert(t.invalidJsonFile);
+      }
+      if (fileInputRef.current) {
+        fileInputRef.current.value = '';
+      }
+    };
+    reader.readAsText(file);
+  };
+
+  const executeOverwrite = () => {
+    if (!pendingImport) return;
+    const newDb: DBState = {
+      settings: pendingImport.settings || db.settings,
+      accounts: pendingImport.accounts || [],
+      portfolios: pendingImport.portfolios || [],
+      transactions: pendingImport.transactions || [],
+      priceCache: pendingImport.priceCache || {}
+    };
+    setDb(newDb);
+    saveDatabaseState(newDb);
+    setPendingImport(null);
+  };
+
+  const executeMerge = () => {
+    if (!pendingImport) return;
+    const newDb: DBState = {
+      ...db,
+      portfolios: [...db.portfolios],
+      accounts: [...db.accounts],
+      transactions: [...db.transactions],
+      priceCache: JSON.parse(JSON.stringify(db.priceCache))
+    };
+
+    if (pendingImport.portfolios) {
+      pendingImport.portfolios.forEach((p: Portfolio) => {
+        if (!newDb.portfolios.find(ex => ex.id === p.id)) newDb.portfolios.push(p);
+      });
+    }
+
+    if (pendingImport.accounts) {
+      pendingImport.accounts.forEach((a: Account) => {
+        if (!newDb.accounts.find(ex => ex.id === a.id)) newDb.accounts.push(a);
+      });
+    }
+
+    if (pendingImport.transactions) {
+      pendingImport.transactions.forEach((tx: Transaction) => {
+        if (!newDb.transactions.find(ex => ex.id === tx.id)) newDb.transactions.push(tx);
+      });
+    }
+
+    if (pendingImport.priceCache) {
+      Object.keys(pendingImport.priceCache).forEach(symbol => {
+        if (!newDb.priceCache[symbol]) {
+          newDb.priceCache[symbol] = pendingImport.priceCache[symbol];
+        } else {
+          Object.keys(pendingImport.priceCache[symbol]).forEach(date => {
+            if (!newDb.priceCache[symbol][date]) {
+              newDb.priceCache[symbol][date] = pendingImport.priceCache[symbol][date];
+            }
+          });
+        }
+      });
+    }
+
+    setDb(newDb);
+    saveDatabaseState(newDb);
+    setPendingImport(null);
+  };
+
   return (
     <div className="min-h-screen bg-[#04060b] text-slate-100 flex flex-col font-sans select-none relative overflow-hidden" dir={lang === 'ar' ? 'rtl' : 'ltr'}>
       {/* Dynamic atmospheric subtle lighting */}
@@ -3417,6 +3526,102 @@ export default function App() {
                   </div>
                 </div>
               </div>
+
+              {/* Backup & Restore Card */}
+              <div id="settings-backup-card" className="max-w-2xl mx-auto bg-slate-900/40 p-6 rounded-2xl border border-slate-800/80 backdrop-blur-md">
+                <div className="space-y-5">
+                  <h3 className="font-extrabold text-sm text-white tracking-wider uppercase font-mono border-b border-slate-800 pb-2 flex items-center gap-2">
+                    <Database className="w-4 h-4 text-emerald-400" />
+                    {t.backupRestoreTitle}
+                  </h3>
+                  
+                  <div className="text-xs text-slate-400 leading-relaxed font-sans mb-4">
+                    {t.backupRestoreDesc}
+                  </div>
+
+                  <div className="flex flex-col sm:flex-row gap-4">
+                    <button
+                      onClick={handleExportDatabase}
+                      className="flex-1 bg-slate-800 hover:bg-slate-700 text-white font-bold py-3 px-4 rounded-xl flex items-center justify-center gap-2 transition-all border border-slate-700 cursor-pointer"
+                    >
+                      <Download className="w-4 h-4 text-emerald-400" />
+                      <span>{t.exportDatabaseBtn}</span>
+                    </button>
+                    
+                    <div className="flex-1 relative">
+                      <input
+                        type="file"
+                        accept=".json"
+                        onChange={handleFileSelect}
+                        ref={fileInputRef}
+                        className="absolute inset-0 w-full h-full opacity-0 cursor-pointer"
+                        title={t.importDatabaseBtn}
+                      />
+                      <button className="w-full bg-slate-800 hover:bg-slate-700 text-white font-bold py-3 px-4 rounded-xl flex items-center justify-center gap-2 transition-all border border-slate-700 pointer-events-none">
+                        <Upload className="w-4 h-4 text-sky-400" />
+                        <span>{t.importDatabaseBtn}</span>
+                      </button>
+                    </div>
+                  </div>
+                </div>
+              </div>
+
+              {/* Pending Import Modal */}
+              {pendingImport && (
+                <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/80 backdrop-blur-sm p-4">
+                  <div className="bg-slate-900 border border-slate-700 rounded-2xl max-w-lg w-full p-6 space-y-6 shadow-2xl">
+                    <div className="flex items-center gap-3 border-b border-slate-800 pb-4">
+                      <div className="p-2 bg-sky-500/10 text-sky-400 rounded-lg">
+                        <Database className="w-6 h-6" />
+                      </div>
+                      <h2 className="text-xl font-black text-white">{t.importOptionsTitle}</h2>
+                    </div>
+
+                    <div className="space-y-4">
+                      <div className="bg-rose-950/20 border border-rose-500/20 p-4 rounded-xl">
+                        <h4 className="flex items-center gap-2 font-bold text-rose-400 mb-2 text-sm">
+                          <AlertTriangle className="w-4 h-4" />
+                          {t.overwriteDatabaseTitle}
+                        </h4>
+                        <p className="text-xs text-slate-300">
+                          {t.overwriteDatabaseDesc}
+                        </p>
+                        <button
+                          onClick={executeOverwrite}
+                          className="mt-3 w-full bg-rose-600 hover:bg-rose-500 text-white font-bold py-2 rounded-lg text-sm transition-colors cursor-pointer"
+                        >
+                          {t.overwriteBtn}
+                        </button>
+                      </div>
+
+                      <div className="bg-emerald-950/20 border border-emerald-500/20 p-4 rounded-xl">
+                        <h4 className="flex items-center gap-2 font-bold text-emerald-400 mb-2 text-sm">
+                          <Database className="w-4 h-4" />
+                          {t.mergeDataTitle}
+                        </h4>
+                        <p className="text-xs text-slate-300">
+                          {t.mergeDataDesc}
+                        </p>
+                        <button
+                          onClick={executeMerge}
+                          className="mt-3 w-full bg-emerald-600 hover:bg-emerald-500 text-white font-bold py-2 rounded-lg text-sm transition-colors cursor-pointer"
+                        >
+                          {t.mergeBtn}
+                        </button>
+                      </div>
+                    </div>
+
+                    <div className="pt-2">
+                      <button
+                        onClick={() => setPendingImport(null)}
+                        className="w-full bg-slate-800 hover:bg-slate-700 text-slate-300 font-bold py-2.5 rounded-xl transition-colors cursor-pointer"
+                      >
+                        {t.cancel}
+                      </button>
+                    </div>
+                  </div>
+                </div>
+              )}
 
               {/* Comprehensive Legal Disclaimer & Financial Information Advisory Card */}
               <div id="settings-disclaimer-card" className="max-w-2xl mx-auto bg-rose-950/10 p-6 rounded-2xl border border-rose-500/25 backdrop-blur-md space-y-4">

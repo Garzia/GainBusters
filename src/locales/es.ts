@@ -115,6 +115,21 @@ GainBusters se ha diseñado como una **aplicación 100% autohospedada, primero f
   brokerBankLabel: 'Broker / Banco',
   refreshQuotesBtn: 'Actualizar Cotizaciones',
   
+  // Backup & Restore keys
+  backupRestoreTitle: 'Copia de Seguridad y Restauración',
+  backupRestoreDesc: 'Exporte la base de datos completa en formato JSON para copia de seguridad. Puede importar el archivo guardado para sobrescribir o fusionar datos.',
+  exportDatabaseBtn: 'Exportar Base de Datos (JSON)',
+  importDatabaseBtn: 'Importar Base de Datos...',
+  importOptionsTitle: 'Opciones de Importación',
+  overwriteDatabaseTitle: 'Sobrescribir Base de Datos',
+  overwriteDatabaseDesc: 'Elimina todos los datos actuales (carteras, transacciones, configuración) y los reemplaza completamente con los datos del archivo importado. Esta acción es destructiva.',
+  overwriteBtn: 'Sobrescribir todo',
+  mergeDataTitle: 'Fusionar Datos',
+  mergeDataDesc: 'Mantiene los datos existentes y solo añade nuevos registros (carteras, cuentas, transacciones) del archivo importado basándose en IDs únicos. Las cotizaciones históricas se fusionarán.',
+  mergeBtn: 'Fusionar de forma segura',
+  invalidBackupFile: 'Archivo de copia de seguridad no válido',
+  invalidJsonFile: 'Archivo JSON no válido',
+
   // Mission page extra keys:
   missionIntro: '¡Bienvenido a GainBusters! Si está cansado de comisiones de gestión que erosionan su capital, comisiones ocultas de entrada y asesores trajeados que impulsan fondos ineficientes para inflar sus bonos, está en el lugar correcto. Somos los cazadores de la planificación financiera rigurosa y racional.',
   missionPilarsTitle: 'Los 5 Pilares de los Cazadores de Rentabilidad:',

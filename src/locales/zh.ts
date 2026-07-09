@@ -115,6 +115,21 @@ GainBusters 被设计为一款 **100% 自托管、首重离线的本地应用**�
   brokerBankLabel: '经纪商 / 银行',
   refreshQuotesBtn: '刷新证券行情',
   
+  // Backup & Restore keys
+  backupRestoreTitle: '备份与恢复',
+  backupRestoreDesc: '导出整个数据库为 JSON 格式以进行备份。您可以导入已保存的文件来覆盖或合并数据。',
+  exportDatabaseBtn: '导出数据库 (JSON)',
+  importDatabaseBtn: '导入数据库...',
+  importOptionsTitle: '导入选项',
+  overwriteDatabaseTitle: '覆盖数据库',
+  overwriteDatabaseDesc: '删除所有当前数据（投资组合、交易、配置），并完全用导入文件中的数据替换。此操作具有破坏性。',
+  overwriteBtn: '覆盖所有数据',
+  mergeDataTitle: '合并数据',
+  mergeDataDesc: '保留现有数据，仅根据唯一 ID 添加导入文件中的新记录（投资组合、账户、交易）。历史报价将被合并。',
+  mergeBtn: '安全合并',
+  invalidBackupFile: '无效的备份文件',
+  invalidJsonFile: '无效的 JSON 文件',
+
   // Mission page extra keys:
   missionIntro: '欢迎来到 GainBusters！如果您已经厌倦了蚕食本金的管理费、层层包装的暗箱申购手续费以及只为推销劣质主动基金以套取奖金的西装顾问，那么您选对了地方。我们是崇尚严谨和理性科学理财的纯粹猎手。',
   missionPilarsTitle: '收益猎人的 5 大投资基石：',

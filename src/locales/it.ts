@@ -115,6 +115,21 @@ GainBusters nasce come un software **100% autogestito (Self-Hosted)**, pensato p
   brokerBankLabel: 'Broker / Banca',
   refreshQuotesBtn: 'Rinfresca Quotazioni',
   
+  // Backup & Restore keys
+  backupRestoreTitle: 'Backup & Ripristino',
+  backupRestoreDesc: 'Esporta l\'intero database in formato JSON per il backup. Puoi importare il file salvato per sovrascrivere o unire i dati.',
+  exportDatabaseBtn: 'Esporta Database (JSON)',
+  importDatabaseBtn: 'Importa Database...',
+  importOptionsTitle: 'Opzioni di Importazione',
+  overwriteDatabaseTitle: 'Sovrascrivi Database',
+  overwriteDatabaseDesc: 'Elimina tutti i dati correnti (portafogli, transazioni, configurazioni) e li sostituisce interamente con i dati presenti nel file importato. Questa azione è distruttiva.',
+  overwriteBtn: 'Sovrascrivi tutto',
+  mergeDataTitle: 'Unisci Dati (Merge)',
+  mergeDataDesc: 'Mantiene i dati esistenti e aggiunge solo i nuovi record (portafogli, conti, transazioni) dal file importato, basandosi sugli ID univoci. Le quotazioni storiche verranno integrate.',
+  mergeBtn: 'Unisci in modo sicuro',
+  invalidBackupFile: 'File di backup non valido',
+  invalidJsonFile: 'File JSON non valido',
+
   // Mission page extra keys:
   missionIntro: 'Benvenuto in GainBusters! Se sei stanco di dazi di gestione che erodono il tuo capitale, commissioni di ingresso camuffate e consulenti in giacca che spingono fondi inefficienti per gonfiarsi i bonus, sei nel posto giusto. Siamo i cacciatori della pianificazione finanziaria rigorosa e razionale.',
   missionPilarsTitle: 'I 5 Pilastri dei Cacciatori di Rendimento (Yield Hunters):',

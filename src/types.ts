@@ -182,6 +182,21 @@ export interface LanguagePhrases {
   brokerBankLabel: string;
   refreshQuotesBtn: string;
   
+  // Backup & Restore keys
+  backupRestoreTitle: string;
+  backupRestoreDesc: string;
+  exportDatabaseBtn: string;
+  importDatabaseBtn: string;
+  importOptionsTitle: string;
+  overwriteDatabaseTitle: string;
+  overwriteDatabaseDesc: string;
+  overwriteBtn: string;
+  mergeDataTitle: string;
+  mergeDataDesc: string;
+  mergeBtn: string;
+  invalidBackupFile: string;
+  invalidJsonFile: string;
+
   // Mission page extra keys:
   missionIntro: string;
   missionPilarsTitle: string;

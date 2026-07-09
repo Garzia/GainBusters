@@ -115,6 +115,21 @@ GainBusters is crafted as a **100% self-hosted, offline-first application** buil
   brokerBankLabel: 'Broker / Bank',
   refreshQuotesBtn: 'Refresh Quotes',
   
+  // Backup & Restore keys
+  backupRestoreTitle: 'Backup & Restore',
+  backupRestoreDesc: 'Export the entire database in JSON format for backup. You can import the saved file to overwrite or merge data.',
+  exportDatabaseBtn: 'Export Database (JSON)',
+  importDatabaseBtn: 'Import Database...',
+  importOptionsTitle: 'Import Options',
+  overwriteDatabaseTitle: 'Overwrite Database',
+  overwriteDatabaseDesc: 'Deletes all current data (portfolios, transactions, config) and replaces it entirely with the data from the imported file. This action is destructive.',
+  overwriteBtn: 'Overwrite everything',
+  mergeDataTitle: 'Merge Data',
+  mergeDataDesc: 'Keeps existing data and only adds new records (portfolios, accounts, transactions) from the imported file based on unique IDs. Historical quotes will be merged.',
+  mergeBtn: 'Merge safely',
+  invalidBackupFile: 'Invalid backup file',
+  invalidJsonFile: 'Invalid JSON file',
+
   // Mission page extra keys:
   missionIntro: 'Welcome to GainBusters! If you are tired of management fees eating up your capital, concealed entry commissions, and suited advisors pushing active funds to inflate their bonuses, you are in the right place. We are the hunters of rigorous and rational financial planning.',
   missionPilarsTitle: 'The 5 Pillars of Yield Hunters:',

@@ -115,6 +115,21 @@ GainBusters est conçu pour être une **application 100% autohébergée et local
   brokerBankLabel: 'Courtier / Banque',
   refreshQuotesBtn: 'Rafraîchir les Cours',
   
+  // Backup & Restore keys
+  backupRestoreTitle: 'Sauvegarde & Restauration',
+  backupRestoreDesc: 'Exportez toute la base de données au format JSON pour la sauvegarder. Vous pouvez importer le fichier pour écraser ou fusionner les données.',
+  exportDatabaseBtn: 'Exporter la Base de Données (JSON)',
+  importDatabaseBtn: 'Importer la Base de Données...',
+  importOptionsTitle: 'Options d\'Importation',
+  overwriteDatabaseTitle: 'Écraser la Base de Données',
+  overwriteDatabaseDesc: 'Supprime toutes les données actuelles (portefeuilles, transactions, configurations) et les remplace entièrement par les données du fichier importé. Cette action est destructive.',
+  overwriteBtn: 'Tout écraser',
+  mergeDataTitle: 'Fusionner les Données',
+  mergeDataDesc: 'Conserve les données existantes et ajoute uniquement les nouveaux enregistrements (portefeuilles, comptes, transactions) du fichier importé en fonction des ID uniques. Les cours historiques seront fusionnés.',
+  mergeBtn: 'Fusionner en toute sécurité',
+  invalidBackupFile: 'Fichier de sauvegarde non valide',
+  invalidJsonFile: 'Fichier JSON non valide',
+
   // Mission page extra keys:
   missionIntro: 'Bienvenue chez GainBusters ! Si vous êtes fatigué des frais de gestion qui érodent votre capital, des commissions déguisées et des conseillers en costard qui poussent des fonds inefficaces pour leurs bonus, vous êtes au bon endroit. Nous sommes les chasseurs d\'une planification financière rigoureuse.',
   missionPilarsTitle: 'Les 5 Piliers des Chasseurs de Rendement :',
