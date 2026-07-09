@@ -493,12 +493,12 @@ export default function InteractiveChart({
               </div>
             )}
 
-            <div className="overflow-x-auto w-full">
+            <div className="w-full">
               <svg
                 width="100%"
-                height={chartHeight}
+                height="100%"
                 viewBox={`0 0 ${chartWidth} ${chartHeight}`}
-                className="overflow-visible select-none"
+                className="overflow-visible select-none min-h-[250px] sm:min-h-[350px]"
                 onMouseMove={(e) => {
                   const svgRect = e.currentTarget.getBoundingClientRect();
                   const x = e.clientX - svgRect.left;
@@ -688,75 +688,91 @@ export default function InteractiveChart({
 
             <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
               {/* Tile 1: TWRR */}
-              <div className="bg-slate-900/10 p-3 h-24 flex flex-col justify-between rounded-xl border border-slate-800/60 hover:border-slate-700/60 transition duration-200">
-                <span className="text-[10px] text-slate-400 font-extrabold uppercase tracking-wide font-mono">{t.twrrPeriodLabel}</span>
-                <span className={`text-base font-black font-mono ${periodTWRR >= 0 ? 'text-emerald-400' : 'text-rose-400'}`}>
-                  {periodTWRR >= 0 ? '+' : ''}{periodTWRR.toFixed(2)}%
-                </span>
-                <span className="text-[8px] text-slate-500 leading-tight">{t.twrrDesc}</span>
+              <div className="bg-slate-900/10 p-3 h-full min-h-[7rem] sm:min-h-[6.5rem] flex flex-col rounded-xl border border-slate-800/60 hover:border-slate-700/60 transition duration-200">
+                <span className="text-[9px] sm:text-[10px] text-slate-400 font-extrabold uppercase tracking-wide font-mono line-clamp-1 mb-1" title={t.twrrPeriodLabel}>{t.twrrPeriodLabel}</span>
+                <div className="flex-1 flex items-center min-w-0">
+                  <span className={`text-xs sm:text-sm md:text-base font-black font-mono shrink-0 ${periodTWRR >= 0 ? 'text-emerald-400' : 'text-rose-400'}`}>
+                    {periodTWRR >= 0 ? '+' : ''}{periodTWRR.toFixed(2)}%
+                  </span>
+                </div>
+                <span className="text-[8px] text-slate-500 leading-tight mt-1 line-clamp-2 shrink-0" title={t.twrrDesc}>{t.twrrDesc}</span>
               </div>
 
               {/* Tile 2: MWRR */}
-              <div className="bg-slate-900/10 p-3 h-24 flex flex-col justify-between rounded-xl border border-slate-800/60 hover:border-slate-700/60 transition duration-200">
-                <span className="text-[10px] text-slate-400 font-extrabold uppercase tracking-wide font-mono">{t.mwrrPeriodLabel}</span>
-                <span className={`text-base font-black font-mono ${periodMWRR >= 0 ? 'text-emerald-400' : 'text-rose-400'}`}>
-                  {periodMWRR >= 0 ? '+' : ''}{periodMWRR.toFixed(2)}%
-                </span>
-                <span className="text-[8px] text-slate-500 leading-tight">{t.mwrrDesc}</span>
+              <div className="bg-slate-900/10 p-3 h-full min-h-[7rem] sm:min-h-[6.5rem] flex flex-col rounded-xl border border-slate-800/60 hover:border-slate-700/60 transition duration-200">
+                <span className="text-[9px] sm:text-[10px] text-slate-400 font-extrabold uppercase tracking-wide font-mono line-clamp-1 mb-1" title={t.mwrrPeriodLabel}>{t.mwrrPeriodLabel}</span>
+                <div className="flex-1 flex items-center min-w-0">
+                  <span className={`text-xs sm:text-sm md:text-base font-black font-mono shrink-0 ${periodMWRR >= 0 ? 'text-emerald-400' : 'text-rose-400'}`}>
+                    {periodMWRR >= 0 ? '+' : ''}{periodMWRR.toFixed(2)}%
+                  </span>
+                </div>
+                <span className="text-[8px] text-slate-500 leading-tight mt-1 line-clamp-2 shrink-0" title={t.mwrrDesc}>{t.mwrrDesc}</span>
               </div>
 
               {/* Tile 3: Volatilita */}
-              <div className="bg-slate-900/10 p-3 h-24 flex flex-col justify-between rounded-xl border border-slate-800/60 hover:border-slate-700/60 transition duration-200">
-                <span className="text-[10px] text-slate-400 font-extrabold uppercase tracking-wide font-mono">{t.volatilityYearLabel}</span>
-                <span className="text-base font-black font-mono text-white">
-                  {periodVolatility.toFixed(1)}%
-                </span>
-                <span className="text-[8px] text-slate-500 leading-tight font-mono">{t.volatilityDesc}</span>
+              <div className="bg-slate-900/10 p-3 h-full min-h-[7rem] sm:min-h-[6.5rem] flex flex-col rounded-xl border border-slate-800/60 hover:border-slate-700/60 transition duration-200">
+                <span className="text-[9px] sm:text-[10px] text-slate-400 font-extrabold uppercase tracking-wide font-mono line-clamp-1 mb-1" title={t.volatilityYearLabel}>{t.volatilityYearLabel}</span>
+                <div className="flex-1 flex items-center min-w-0">
+                  <span className="text-xs sm:text-sm md:text-base font-black font-mono text-white shrink-0">
+                    {periodVolatility.toFixed(1)}%
+                  </span>
+                </div>
+                <span className="text-[8px] text-slate-500 leading-tight mt-1 line-clamp-2 shrink-0" title={t.volatilityDesc}>{t.volatilityDesc}</span>
               </div>
 
               {/* Tile 4: Max Drawdown */}
-              <div className="bg-slate-900/10 p-3 h-24 flex flex-col justify-between rounded-xl border border-slate-800/60 hover:border-slate-700/60 transition duration-200">
-                <span className="text-[10px] text-slate-400 font-extrabold uppercase tracking-wide font-mono">{t.maxDrawdownLabel}</span>
-                <span className="text-base font-black font-mono text-rose-400">
-                  -{periodMaxDrawdown.toFixed(1)}%
-                </span>
-                <span className="text-[8px] text-slate-500 leading-tight">{t.maxDrawdownDesc}</span>
+              <div className="bg-slate-900/10 p-3 h-full min-h-[7rem] sm:min-h-[6.5rem] flex flex-col rounded-xl border border-slate-800/60 hover:border-slate-700/60 transition duration-200">
+                <span className="text-[9px] sm:text-[10px] text-slate-400 font-extrabold uppercase tracking-wide font-mono line-clamp-1 mb-1" title={t.maxDrawdownLabel}>{t.maxDrawdownLabel}</span>
+                <div className="flex-1 flex items-center min-w-0">
+                  <span className="text-xs sm:text-sm md:text-base font-black font-mono text-rose-400 shrink-0">
+                    -{periodMaxDrawdown.toFixed(1)}%
+                  </span>
+                </div>
+                <span className="text-[8px] text-slate-500 leading-tight mt-1 line-clamp-2 shrink-0" title={t.maxDrawdownDesc}>{t.maxDrawdownDesc}</span>
               </div>
 
               {/* Tile 5: Investito nel Periodo */}
-              <div className="bg-slate-900/10 p-3 h-24 flex flex-col justify-between rounded-xl border border-slate-800/60 hover:border-slate-700/60 transition duration-200">
-                <span className="text-[10px] text-slate-400 font-extrabold uppercase tracking-wide font-mono">{t.netCapitalInvestedLabel}</span>
-                <span className="text-sm font-bold font-mono text-slate-200 truncate">
-                  {periodInvested.toLocaleString(undefined, { minimumFractionDigits: 2 })} {currencySymbol}
-                </span>
-                <span className="text-[8px] text-slate-500 leading-tight">{t.capitalInvestedDesc}</span>
+              <div className="bg-slate-900/10 p-3 h-full min-h-[7rem] sm:min-h-[6.5rem] flex flex-col rounded-xl border border-slate-800/60 hover:border-slate-700/60 transition duration-200">
+                <span className="text-[9px] sm:text-[10px] text-slate-400 font-extrabold uppercase tracking-wide font-mono line-clamp-1 mb-1" title={t.netCapitalInvestedLabel}>{t.netCapitalInvestedLabel}</span>
+                <div className="flex-1 flex items-center min-w-0 overflow-hidden">
+                  <span className="text-xs sm:text-sm md:text-sm font-bold font-mono text-slate-200 break-all shrink-0">
+                    {periodInvested.toLocaleString(undefined, { minimumFractionDigits: 2 })} {currencySymbol}
+                  </span>
+                </div>
+                <span className="text-[8px] text-slate-500 leading-tight mt-1 line-clamp-2 shrink-0" title={t.capitalInvestedDesc}>{t.capitalInvestedDesc}</span>
               </div>
 
               {/* Tile 6: Commissioni nel Periodo */}
-              <div className="bg-slate-900/10 p-3 h-24 flex flex-col justify-between rounded-xl border border-slate-800/60 hover:border-slate-700/60 transition duration-200">
-                <span className="text-[10px] text-slate-400 font-extrabold uppercase tracking-wide font-mono">{t.overallCommissionsLabel}</span>
-                <span className="text-sm font-bold font-mono text-rose-400 truncate">
-                  {periodCommissions.toLocaleString(undefined, { minimumFractionDigits: 2 })} {currencySymbol}
-                </span>
-                <span className="text-[8px] text-slate-500 leading-tight">{t.totalCommissionsDesc}</span>
+              <div className="bg-slate-900/10 p-3 h-full min-h-[7rem] sm:min-h-[6.5rem] flex flex-col rounded-xl border border-slate-800/60 hover:border-slate-700/60 transition duration-200">
+                <span className="text-[9px] sm:text-[10px] text-slate-400 font-extrabold uppercase tracking-wide font-mono line-clamp-1 mb-1" title={t.overallCommissionsLabel}>{t.overallCommissionsLabel}</span>
+                <div className="flex-1 flex items-center min-w-0 overflow-hidden">
+                  <span className="text-xs sm:text-sm md:text-sm font-bold font-mono text-rose-400 break-all shrink-0">
+                    {periodCommissions.toLocaleString(undefined, { minimumFractionDigits: 2 })} {currencySymbol}
+                  </span>
+                </div>
+                <span className="text-[8px] text-slate-500 leading-tight mt-1 line-clamp-2 shrink-0" title={t.totalCommissionsDesc}>{t.totalCommissionsDesc}</span>
               </div>
 
               {/* Tile 7: Valore Finale del Periodo */}
-              <div className="bg-slate-900/10 p-3 h-24 flex flex-col justify-between rounded-xl border border-slate-800/60 hover:border-slate-700/60 transition duration-200">
-                <span className="text-[10px] text-slate-400 font-extrabold uppercase tracking-wide font-mono">{t.finalPeriodValueLabel}</span>
-                <span className="text-sm font-bold font-mono text-emerald-400 truncate">
-                  {periodFinalValue.toLocaleString(undefined, { minimumFractionDigits: 2 })} {currencySymbol}
-                </span>
-                <span className="text-[8px] text-slate-500 leading-tight">{t.finalValueDesc}</span>
+              <div className="bg-slate-900/10 p-3 h-full min-h-[7rem] sm:min-h-[6.5rem] flex flex-col rounded-xl border border-slate-800/60 hover:border-slate-700/60 transition duration-200">
+                <span className="text-[9px] sm:text-[10px] text-slate-400 font-extrabold uppercase tracking-wide font-mono line-clamp-1 mb-1" title={t.finalPeriodValueLabel}>{t.finalPeriodValueLabel}</span>
+                <div className="flex-1 flex items-center min-w-0 overflow-hidden">
+                  <span className="text-xs sm:text-sm md:text-sm font-bold font-mono text-emerald-400 break-all shrink-0">
+                    {periodFinalValue.toLocaleString(undefined, { minimumFractionDigits: 2 })} {currencySymbol}
+                  </span>
+                </div>
+                <span className="text-[8px] text-slate-500 leading-tight mt-1 line-clamp-2 shrink-0" title={t.finalValueDesc}>{t.finalValueDesc}</span>
               </div>
 
               {/* Tile 8: Guadagno Netto nel Periodo */}
-              <div className="bg-slate-900/10 p-3 h-24 flex flex-col justify-between rounded-xl border border-slate-800/60 hover:border-slate-700/60 transition duration-200">
-                <span className="text-[10px] text-slate-400 font-extrabold uppercase tracking-wide font-mono">{t.netPeriodGainLabel}</span>
-                <span className={`text-sm font-bold font-mono truncate ${periodNetGain >= 0 ? 'text-emerald-400' : 'text-rose-400'}`}>
-                  {periodNetGain >= 0 ? '+' : ''}{periodNetGain.toLocaleString(undefined, { minimumFractionDigits: 2 })} {currencySymbol}
-                </span>
-                <span className="text-[8px] text-slate-500 leading-tight">{t.netGainDesc}</span>
+              <div className="bg-slate-900/10 p-3 h-full min-h-[7rem] sm:min-h-[6.5rem] flex flex-col rounded-xl border border-slate-800/60 hover:border-slate-700/60 transition duration-200">
+                <span className="text-[9px] sm:text-[10px] text-slate-400 font-extrabold uppercase tracking-wide font-mono line-clamp-1 mb-1" title={t.netPeriodGainLabel}>{t.netPeriodGainLabel}</span>
+                <div className="flex-1 flex items-center min-w-0 overflow-hidden">
+                  <span className={`text-xs sm:text-sm md:text-sm font-bold font-mono break-all shrink-0 ${periodNetGain >= 0 ? 'text-emerald-400' : 'text-rose-400'}`}>
+                    {periodNetGain >= 0 ? '+' : ''}{periodNetGain.toLocaleString(undefined, { minimumFractionDigits: 2 })} {currencySymbol}
+                  </span>
+                </div>
+                <span className="text-[8px] text-slate-500 leading-tight mt-1 line-clamp-2 shrink-0" title={t.netGainDesc}>{t.netGainDesc}</span>
               </div>
             </div>
           </div>

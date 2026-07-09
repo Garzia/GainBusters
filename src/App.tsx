@@ -44,7 +44,11 @@ import {
   Download,
   Upload,
   Database,
-  AlertTriangle
+  AlertTriangle,
+  Menu,
+  X,
+  ChevronLeft,
+  ChevronRight
 } from 'lucide-react';
 
 const defaultInitialDB: DBState = {
@@ -158,6 +162,8 @@ export default function App() {
 
   // Navigation state
   const [activeTab, setActiveTab] = useState<string>('dashboard');
+  const [isMobileMenuOpen, setIsMobileMenuOpen] = useState<boolean>(false);
+  const [isDesktopSidebarOpen, setIsDesktopSidebarOpen] = useState<boolean>(true);
 
   // Interactive toggle states
   const [includeCommissions, setIncludeCommissions] = useState<boolean>(true);
@@ -205,7 +211,45 @@ export default function App() {
   const [pendingImport, setPendingImport] = useState<DBState | null>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
 
+  // Dynamic sticky sidebar detection
+  const sidebarRef = useRef<HTMLDivElement>(null);
+  const [useStickySidebar, setUseStickySidebar] = useState<boolean>(false);
+
   // ================= REACT LIFE FLOWS =================
+
+  useEffect(() => {
+    const checkSticky = () => {
+      if (window.innerWidth < 1024) {
+        setUseStickySidebar(false);
+        return;
+      }
+      if (sidebarRef.current) {
+        const sidebarHeight = sidebarRef.current.getBoundingClientRect().height;
+        // Available space is viewport minus 88px header offset and some bottom padding safety
+        const availableHeight = window.innerHeight - 88 - 48;
+        setUseStickySidebar(availableHeight >= sidebarHeight);
+      }
+    };
+
+    // Initial check
+    checkSticky();
+    window.addEventListener('resize', checkSticky);
+
+    let resizeObserver: ResizeObserver | null = null;
+    if (sidebarRef.current && typeof ResizeObserver !== 'undefined') {
+      resizeObserver = new ResizeObserver(() => {
+        checkSticky();
+      });
+      resizeObserver.observe(sidebarRef.current);
+    }
+
+    return () => {
+      window.removeEventListener('resize', checkSticky);
+      if (resizeObserver) {
+        resizeObserver.disconnect();
+      }
+    };
+  }, [isDesktopSidebarOpen, isAuthenticated, activeTab]);
 
   const checkStorageMode = async (): Promise<'local' | 'browser'> => {
     try {
@@ -2179,49 +2223,55 @@ export default function App() {
   };
 
   return (
-    <div className="min-h-screen bg-[#04060b] text-slate-100 flex flex-col font-sans select-none relative overflow-hidden" dir={lang === 'ar' ? 'rtl' : 'ltr'}>
+    <div className="min-h-screen bg-[#04060b] text-slate-100 flex flex-col font-sans select-none relative overflow-x-clip" dir={lang === 'ar' ? 'rtl' : 'ltr'}>
       {/* Dynamic atmospheric subtle lighting */}
       <div className="absolute top-0 right-1/4 w-[500px] h-[500px] bg-emerald-500/5 rounded-full blur-[150px] pointer-events-none"></div>
       
       {/* Top Navbar Header */}
-      <header className="border-b border-slate-800/80 bg-[#070b16]/70 backdrop-blur-md sticky top-0 z-30">
+      <header className="border-b border-slate-800/80 bg-[#070b16]/70 backdrop-blur-md sticky top-0 z-40">
         <div className="max-w-7xl mx-auto px-4 md:px-6 py-4 flex items-center justify-between gap-4">
           <div className="flex items-center gap-3">
+            <button
+              className="lg:hidden p-2 -ml-2 text-slate-400 hover:text-white rounded-lg hover:bg-slate-800 transition"
+              onClick={() => setIsMobileMenuOpen(!isMobileMenuOpen)}
+            >
+              {isMobileMenuOpen ? <X className="w-5 h-5" /> : <Menu className="w-5 h-5" />}
+            </button>
             <img
               src="/favicon.png"
               alt="GainBusters Emblem"
-              className="w-10 h-10 rounded-xl object-cover border border-emerald-500/10 shadow"
+              className="w-8 h-8 md:w-10 md:h-10 rounded-xl object-cover border border-emerald-500/10 shadow hidden sm:block"
               referrerPolicy="no-referrer"
             />
             <div>
-              <span className="font-extrabold text-white text-lg tracking-tight block">
+              <span className="font-extrabold text-white text-base md:text-lg tracking-tight block">
                 {t.appName}
               </span>
-              <span className="text-[10px] text-slate-400 font-mono uppercase tracking-widest block font-bold">
+              <span className="text-[10px] text-slate-400 font-mono uppercase tracking-widest block font-bold hidden sm:block">
                 {t.cacciatoreDiRenditaLabel}
               </span>
             </div>
           </div>
 
-          <div className="flex items-center gap-4">
+          <div className="flex items-center gap-2 md:gap-4">
             {/* Force Sync manually button */}
             <button
               onClick={() => triggerPriceSync(db, true)}
               disabled={isSyncingPrices}
-              className={`text-xs font-bold font-sans py-1 px-3 rounded-xl border flex items-center gap-1.5 transition-all duration-300 ${
+              className={`text-xs font-bold font-sans py-1.5 md:py-1 px-2 md:px-3 rounded-xl border flex items-center gap-1.5 transition-all duration-300 ${
                 isSyncingPrices 
                   ? 'bg-slate-900 border-slate-800 text-slate-500 cursor-not-allowed'
                   : 'bg-emerald-500/10 border-emerald-500/20 text-emerald-400 hover:bg-emerald-500/15 cursor-pointer shadow-sm hover:border-emerald-500/30'
               }`}
               title={t.refreshPricesTooltip}
             >
-              <RefreshCw className={`w-3.5 h-3.5 ${isSyncingPrices ? 'animate-spin' : ''}`} />
-              <span>{t.refreshPricesLabel}</span>
+              <RefreshCw className={`w-4 h-4 md:w-3.5 md:h-3.5 ${isSyncingPrices ? 'animate-spin' : ''}`} />
+              <span className="hidden md:inline">{t.refreshPricesLabel}</span>
             </button>
 
             {/* Syncing activity indicator */}
             {isSyncingPrices && (
-              <span className="text-xs text-slate-500 font-mono flex items-center gap-1.5 bg-slate-950 px-2 py-1 rounded border border-slate-800">
+              <span className="hidden md:flex text-xs text-slate-500 font-mono items-center gap-1.5 bg-slate-950 px-2 py-1 rounded border border-slate-800">
                 <RefreshCw className="w-3.5 h-3.5 animate-spin text-green-500" />
                 <span>Syncing...</span>
               </span>
@@ -2230,7 +2280,7 @@ export default function App() {
             <select
               value={selectedCurrency}
               onChange={(e) => setSelectedCurrency(e.target.value)}
-              className="bg-slate-950 text-white text-xs py-1.5 px-2.5 rounded border border-slate-800 focus:outline-none focus:border-green-500 font-mono cursor-pointer"
+              className="bg-slate-950 text-white text-xs py-1.5 px-2 rounded border border-slate-800 focus:outline-none focus:border-green-500 font-mono cursor-pointer"
             >
               {Array.from(new Set([db.settings.defaultCurrency || 'EUR', ...activeCurrencies])).map(cur => (
                 <option key={cur} value={cur}>{cur} ({getCurrencySymbol(cur)})</option>
@@ -2242,8 +2292,8 @@ export default function App() {
                 setIsAuthenticated(false);
                 setPasswordInput('');
               }}
-              className="text-slate-400 hover:text-white transition p-2 hover:bg-slate-900 rounded"
-              title="Esci"
+              className="text-slate-400 hover:text-white transition p-2 hover:bg-slate-900 rounded hidden sm:block"
+              title={t.logout}
             >
               <LogOut className="w-4 h-4" />
             </button>
@@ -2251,44 +2301,103 @@ export default function App() {
         </div>
       </header>
 
-      <div className="flex-1 max-w-7xl w-full mx-auto px-4 md:px-6 py-6 grid lg:grid-cols-12 gap-8 relative z-10">
+      <div className="flex-1 max-w-7xl w-full mx-auto px-4 md:px-6 py-6 flex flex-col lg:flex-row gap-8 relative">
         
         {/* Navigation Sidebar */}
-        <nav className="lg:col-span-3 space-y-2">
-          <div className="bg-slate-900/20 border border-slate-800/60 rounded-2xl p-3 space-y-1 backdrop-blur-md">
-            <span className="text-[10px] text-slate-500 font-mono tracking-widest uppercase block px-3 mb-2 font-black">
-              {t.navigationSidebarTitle}
-            </span>
-            {[
-              { id: 'dashboard', label: t.dashboard, icon: Home },
-              { id: 'brokers', label: t.accountsPortfolios, icon: Briefcase },
-              { id: 'tools', label: t.tools, icon: Calculator },
-              { id: 'mission', label: t.mission, icon: Coins },
-              { id: 'inflation', label: t.inflationTitle, icon: TrendingUp },
-              { id: 'settings', label: t.settings, icon: SettingsIcon },
-            ].map((item) => {
-              const IconComponent = item.icon;
-              const isActive = activeTab === item.id;
-              return (
+        <nav className={`
+          fixed inset-y-0 start-0 z-50 lg:z-20 w-64
+          ${isDesktopSidebarOpen ? 'lg:w-64' : 'lg:w-[72px]'}
+          transition-all duration-300 ease-in-out
+          ${isMobileMenuOpen ? 'translate-x-0' : '-translate-x-full rtl:translate-x-full lg:translate-x-0 lg:rtl:translate-x-0'}
+          bg-[#070b16] lg:bg-transparent border-r border-slate-800/80 lg:border-none
+          p-4 lg:p-0 shrink-0
+          ${useStickySidebar ? 'lg:sticky lg:top-[88px] lg:self-start' : 'lg:static'}
+        `}>
+          <div ref={sidebarRef} className="bg-slate-900/20 lg:border border-slate-800/60 rounded-2xl p-3 space-y-1 lg:backdrop-blur-md h-full lg:h-auto flex flex-col">
+            <div className="flex justify-between items-center px-2 lg:px-3 mb-2">
+              {(isDesktopSidebarOpen || isMobileMenuOpen) && (
+                <span className="text-[10px] text-slate-500 font-mono tracking-widest uppercase font-black truncate">
+                  {t.navigationSidebarTitle}
+                </span>
+              )}
+              {/* Desktop toggle button */}
+              <button 
+                onClick={() => setIsDesktopSidebarOpen(!isDesktopSidebarOpen)}
+                className="hidden lg:block p-1 text-slate-500 hover:text-white rounded hover:bg-slate-800/60 transition ml-auto"
+              >
+                {isDesktopSidebarOpen ? <ChevronLeft className="w-4 h-4" /> : <Menu className="w-4 h-4" />}
+              </button>
+              {/* Mobile close button */}
+              <button 
+                onClick={() => setIsMobileMenuOpen(false)}
+                className="lg:hidden p-1 -mr-1 text-slate-500 hover:text-white rounded hover:bg-slate-800/60 transition ml-auto"
+              >
+                <X className="w-5 h-5" />
+              </button>
+            </div>
+
+            <div className="space-y-1 flex-1">
+              {[
+                { id: 'dashboard', label: t.dashboard, icon: Home },
+                { id: 'brokers', label: t.accountsPortfolios, icon: Briefcase },
+                { id: 'tools', label: t.tools, icon: Calculator },
+                { id: 'mission', label: t.mission, icon: Coins },
+                { id: 'inflation', label: t.inflationTitle, icon: TrendingUp },
+                { id: 'settings', label: t.settings, icon: SettingsIcon },
+              ].map((item) => {
+                const IconComponent = item.icon;
+                const isActive = activeTab === item.id;
+                return (
+                  <button
+                    key={item.id}
+                    onClick={() => {
+                      setActiveTab(item.id);
+                      setIsMobileMenuOpen(false);
+                    }}
+                    className={`w-full flex items-center ${isDesktopSidebarOpen || isMobileMenuOpen ? 'gap-3 px-3.5' : 'justify-center px-2'} py-2.5 rounded-xl text-left text-sm font-semibold transition-all duration-300 outline-none ${
+                      isActive
+                        ? 'bg-emerald-500/10 border border-emerald-500/25 text-emerald-400 shadow-[0_0_15px_rgba(16,185,129,0.08)]'
+                        : 'text-slate-400 hover:text-white hover:bg-slate-900/50 border border-transparent'
+                    }`}
+                    title={(!isDesktopSidebarOpen && !isMobileMenuOpen) ? item.label : undefined}
+                  >
+                    <IconComponent className={`w-4 h-4 transition-colors duration-300 shrink-0 ${isActive ? 'text-emerald-400' : 'text-slate-500'}`} />
+                    {(isDesktopSidebarOpen || isMobileMenuOpen) && (
+                      <span className="truncate">{item.label}</span>
+                    )}
+                  </button>
+                );
+              })}
+            </div>
+
+            {/* Mobile logout button */}
+            {isMobileMenuOpen && (
+              <div className="mt-auto pt-4 border-t border-slate-800/80 lg:hidden">
                 <button
-                  key={item.id}
-                  onClick={() => setActiveTab(item.id)}
-                  className={`w-full flex items-center gap-3 px-3.5 py-2.5 rounded-xl text-left text-sm font-semibold transition-all duration-300 transform hover:-translate-y-0.5 outline-none ${
-                    isActive
-                      ? 'bg-emerald-500/10 border border-emerald-500/25 text-emerald-400 shadow-[0_0_15px_rgba(16,185,129,0.08)]'
-                      : 'text-slate-400 hover:text-white hover:bg-slate-900/50 border border-transparent'
-                  }`}
+                  onClick={() => {
+                    setIsAuthenticated(false);
+                    setPasswordInput('');
+                  }}
+                  className="w-full flex items-center gap-3 px-3.5 py-2.5 rounded-xl text-left text-sm font-semibold transition-all duration-300 text-rose-400 hover:text-rose-300 hover:bg-rose-950/30"
                 >
-                  <IconComponent className={`w-4 h-4 transition-colors duration-300 ${isActive ? 'text-emerald-400' : 'text-slate-500'}`} />
-                  <span>{item.label}</span>
+                  <LogOut className="w-4 h-4 shrink-0" />
+                  <span>{t.logout}</span>
                 </button>
-              );
-            })}
+              </div>
+            )}
           </div>
         </nav>
 
+        {/* Mobile menu overlay */}
+        {isMobileMenuOpen && (
+          <div 
+            className="fixed inset-0 bg-black/60 backdrop-blur-sm z-40 lg:hidden"
+            onClick={() => setIsMobileMenuOpen(false)}
+          ></div>
+        )}
+
         {/* Content Body */}
-        <main className="lg:col-span-9 space-y-8">
+        <main className="flex-1 w-full min-w-0 space-y-8">
 
           {syncFeedback && (
             <div className={`p-4 rounded-2xl border flex items-center justify-between text-xs font-mono font-bold transition-all duration-300 animate-fade-in ${
@@ -3176,7 +3285,8 @@ export default function App() {
                     {t.noTransactionsMatchingCriteriaLabel}
                   </div>
                 ) : (
-                  <div className="overflow-x-auto rounded-xl border border-slate-800/80 bg-slate-950/40">
+                  <>
+                  <div className="hidden lg:block overflow-x-auto rounded-xl border border-slate-800/80 bg-slate-950/40">
                     <table className="w-full text-left border-collapse text-xs select-text">
                       <thead>
                         <tr className="border-b border-slate-800 bg-slate-900/40 text-slate-400 uppercase tracking-widest font-mono font-black text-[10px]">
@@ -3331,6 +3441,79 @@ export default function App() {
                       </tfoot>
                     </table>
                   </div>
+                  
+                  {/* Mobile Cards View */}
+                  <div className="lg:hidden space-y-4">
+                    {getProcessedTransactions().map((tx) => {
+                      const port = db.portfolios.find(p => p.id === tx.portfolioId);
+                      const isBuy = tx.type === TransactionType.BUY;
+                      const latestPriceObj = getLatestPriceInfo(tx.symbol);
+                      return (
+                        <div key={tx.id} className="bg-slate-900/40 border border-slate-800/80 p-4 rounded-xl space-y-3">
+                          <div className="flex justify-between items-start border-b border-slate-800/60 pb-3">
+                            <div>
+                              <div className="flex items-center gap-2 mb-1">
+                                <span className={`px-2 py-0.5 rounded-lg font-black text-[9px] uppercase tracking-wider ${
+                                  isBuy ? 'bg-emerald-500/10 text-emerald-400 border border-emerald-500/20' : 'bg-rose-500/10 text-rose-400 border border-rose-500/20'
+                                }`}>
+                                  {tx.type}
+                                </span>
+                                <span className="text-white font-black uppercase tracking-wider">{tx.symbol}</span>
+                              </div>
+                              <div className="text-xs text-slate-400">{formatDateString(tx.date, lang, true)}</div>
+                            </div>
+                            <div className="flex gap-2">
+                              <button onClick={() => { setTxForm({ open: true, editId: tx.id, portfolioId: tx.portfolioId, date: tx.date.substring(0, 16), type: tx.type, symbol: tx.symbol, qty: tx.qty, price: tx.price, currency: tx.currency || db.settings.defaultCurrency || 'EUR', commission: tx.commission, notes: tx.notes || '' }); window.scrollTo({ top: 0, behavior: 'smooth' }); }} className="p-1.5 bg-slate-800 text-slate-300 rounded hover:bg-emerald-600 hover:text-white transition">
+                                <Edit className="w-3.5 h-3.5" />
+                              </button>
+                              <button onClick={() => deleteTransactionMutation(tx.id)} className="p-1.5 bg-slate-800 text-slate-300 rounded hover:bg-rose-600 hover:text-white transition">
+                                <Trash2 className="w-3.5 h-3.5" />
+                              </button>
+                            </div>
+                          </div>
+                          <div className="grid grid-cols-2 gap-y-2 gap-x-4 text-xs">
+                            <div>
+                              <span className="block text-[10px] text-slate-500 uppercase tracking-widest">{t.allOption === 'Tutti' ? 'Portafoglio' : t.allOption === 'Todos' ? 'Cartera' : t.allOption === 'Tous' ? 'Portefeuille' : t.allOption === '全部' ? '投资组合' : t.allOption === 'الكل' ? 'المحفظة' : 'Portfolio'}</span>
+                              <span className="text-white font-bold">{port?.name || (t.allOption === 'Tutti' ? 'Incompleto' : 'Incomplete')}</span>
+                            </div>
+                            <div>
+                              <span className="block text-[10px] text-slate-500 uppercase tracking-widest">{t.qtyLabel}</span>
+                              <span className="text-slate-300 font-bold">{tx.qty.toLocaleString()}</span>
+                            </div>
+                            <div>
+                              <span className="block text-[10px] text-slate-500 uppercase tracking-widest">{t.priceLabel}</span>
+                              <span className="text-slate-300 font-bold">{formatCurrency(convertValue(tx.price, tx.currency || 'EUR', selectedCurrency, tx.date), selectedCurrency)}</span>
+                            </div>
+                            <div>
+                              <span className="block text-[10px] text-slate-500 uppercase tracking-widest">{t.allOption === 'Tutti' ? 'Totale' : 'Total'}</span>
+                              <span className="text-slate-300 font-bold">{formatCurrency(convertValue(tx.price * tx.qty, tx.currency || 'EUR', selectedCurrency, tx.date), selectedCurrency)}</span>
+                            </div>
+                            {latestPriceObj && (
+                              <div className="col-span-2 pt-2 mt-1 border-t border-slate-800/40 flex items-center justify-between">
+                                <div>
+                                  <span className="block text-[10px] text-slate-500 uppercase tracking-widest">{t.allOption === 'Tutti' ? 'Valore Attuale' : t.allOption === 'Todos' ? 'Valor Actual' : t.allOption === 'Tous' ? 'Valeur Actuelle' : t.allOption === '全部' ? '最新价值' : t.allOption === 'الكل' ? 'القيمة الحالية' : 'Current Value'}</span>
+                                  <span className="text-emerald-400 font-black">{formatCurrency(convertValue(tx.qty * latestPriceObj.price, tx.currency || 'EUR', selectedCurrency, todayStr), selectedCurrency)}</span>
+                                </div>
+                                <span className="text-[9px] text-slate-400">({formatCurrency(latestPriceObj.price, tx.currency || 'EUR')})</span>
+                              </div>
+                            )}
+                            {tx.commission > 0 && (
+                              <div className="col-span-2 pt-1 border-t border-slate-800/40 flex items-center justify-between">
+                                <span className="block text-[10px] text-slate-500 uppercase tracking-widest">{t.commissionLabel}</span>
+                                <span className="text-rose-400 font-mono">{formatCurrency(convertValue(tx.commission, tx.currency || 'EUR', selectedCurrency, tx.date), selectedCurrency)}</span>
+                              </div>
+                            )}
+                            {tx.notes && (
+                              <div className="col-span-2 pt-1 mt-1 border-t border-slate-800/40 text-[10px] text-slate-500 italic">
+                                {tx.notes}
+                              </div>
+                            )}
+                          </div>
+                        </div>
+                      );
+                    })}
+                  </div>
+                  </>
                 )}
               </div>
             </div>

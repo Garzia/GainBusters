@@ -407,7 +407,7 @@ export default function ToolsPage({ t, currencySymbol, totalNominalValue = 0, la
                   <label className="text-[11px] font-semibold text-slate-400 uppercase tracking-wider block">
                     {t.freqCompoundingLabel}
                   </label>
-                  <div className="grid grid-cols-3 gap-1">
+                  <div className="grid grid-cols-2 sm:grid-cols-4 gap-1">
                     {(['daily', 'monthly', 'annually', 'none'] as const).map((mode) => {
                       const modeLabels: Record<string, string> = {
                         daily: t.compoundingDaily,
@@ -437,7 +437,7 @@ export default function ToolsPage({ t, currencySymbol, totalNominalValue = 0, la
             {/* Results, Graph and real-time hover indicators */}
             <div className="lg:col-span-12 xl:col-span-7 flex flex-col space-y-6">
               {/* Primary PAC Metrics */}
-              <div className="grid grid-cols-3 gap-3">
+              <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
                 <div className="bg-slate-900/30 p-4 rounded-xl border border-slate-800/80">
                   <span className="text-[10px] font-bold text-slate-500 uppercase tracking-wider block mb-1">{t.totalInvestedCard}</span>
                   <span className="text-lg md:text-xl font-bold text-slate-100 font-mono break-all leading-tight">
@@ -495,8 +495,8 @@ export default function ToolsPage({ t, currencySymbol, totalNominalValue = 0, la
 
                   return (
                     <div className="space-y-4">
-                      <div className="overflow-x-auto select-none">
-                        <svg width="100%" height={chartHeight} viewBox={`0 0 ${chartWidth} ${chartHeight}`} className="overflow-visible min-w-[450px]">
+                      <div className="select-none">
+                        <svg width="100%" height="100%" viewBox={`0 0 ${chartWidth} ${chartHeight}`} className="overflow-visible min-h-[250px] sm:min-h-[300px]">
                           {/* Grid line dividers */}
                           {[0.25, 0.5, 0.75, 1].map((p, i) => (
                             <g key={i}>
