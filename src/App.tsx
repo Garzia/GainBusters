@@ -11,6 +11,7 @@ import { saveFileHandleInIndexedDB, getFileHandleFromIndexedDB, clearFileHandleF
 import { syncPricesLocally } from './utils/syncPrices.ts';
 import MissionPage from './components/MissionPage.tsx';
 import ToolsPage from './components/ToolsPage.tsx';
+import OtherCostsPage from './components/OtherCostsPage.tsx';
 import { InflationPage } from './components/InflationPage.tsx';
 import InteractiveChart, { DailyBalance } from './components/InteractiveChart.tsx';
 import { TickerInput } from './components/TickerInput.tsx';
@@ -108,6 +109,7 @@ const defaultInitialDB: DBState = {
   accounts: [],
   portfolios: [],
   transactions: [],
+  otherCosts: [],
   priceCache: {}
 };
 
@@ -157,6 +159,7 @@ export default function App() {
     accounts: [],
     portfolios: [],
     transactions: [],
+    otherCosts: [],
     priceCache: {}
   });
 
@@ -174,6 +177,12 @@ export default function App() {
   const [dashFilter, setDashFilter] = useState<{ type: 'ALL' | 'ACCOUNT' | 'PORTFOLIO' | 'TICKER'; id: string }>({ type: 'ALL', id: '' });
   const [newCurrencyInput, setNewCurrencyInput] = useState<string>('');
 
+  useEffect(() => {
+    if (db.settings?.includeCommissions !== undefined) {
+      setIncludeCommissions(db.settings.includeCommissions);
+    }
+  }, [db.settings?.includeCommissions]);
+
   // Sync operations loading state
   const [isSyncingPrices, setIsSyncingPrices] = useState<boolean>(false);
 
@@ -186,6 +195,25 @@ export default function App() {
   });
   const [txForm, setTxForm] = useState<{ open: boolean; editId: string | null; portfolioId: string; date: string; type: TransactionType; symbol: string; qty: number; price: number; commission: number; currency: string; commissionCurrency: string; notes: string }>({
     open: false, editId: null, portfolioId: '', date: '', type: TransactionType.BUY, symbol: '', qty: 0, price: 0, commission: 0, currency: 'EUR', commissionCurrency: 'EUR', notes: ''
+  });
+  const [costForm, setCostForm] = useState<{
+    open: boolean;
+    editId: string | null;
+    portfolioId: string;
+    date: string;
+    amount: number;
+    currency: string;
+    type: 'bollo' | 'custody' | 'tax' | 'other';
+    notes: string;
+  }>({
+    open: false,
+    editId: null,
+    portfolioId: '',
+    date: '',
+    amount: 0,
+    currency: 'EUR',
+    type: 'bollo',
+    notes: ''
   });
 
   // Transaction Table Filters & Sorting States
@@ -206,6 +234,19 @@ export default function App() {
 
   // Legal disclaimer modal state
   const [showLegalDisclaimerModal, setShowLegalDisclaimerModal] = useState<boolean>(false);
+
+  // Deletion confirmation state
+  const [deleteConfirm, setDeleteConfirm] = useState<{
+    open: boolean;
+    type: 'broker' | 'portfolio' | 'transaction' | 'cost';
+    id: string;
+    message: string;
+  }>({
+    open: false,
+    type: 'broker',
+    id: '',
+    message: ''
+  });
 
   // Backup & Restore state
   const [pendingImport, setPendingImport] = useState<DBState | null>(null);
@@ -860,6 +901,10 @@ export default function App() {
   // Sort chronologically
   const activeTxSorted = [...filteredTx].sort((a, b) => new Date(a.date).getTime() - new Date(b.date).getTime());
 
+  // Other costs matching active settings (bolli, broker fees, taxes, etc.)
+  const otherCostsList = db.otherCosts || [];
+  const activeOtherCosts = otherCostsList.filter(c => activePortIds.includes(c.portfolioId));
+
   // Current owned share metrics
   const tickerMetrics: {
     [sym: string]: {
@@ -990,9 +1035,10 @@ export default function App() {
   });
 
   const totalCommissionsPaid = activeTxSorted.reduce((sum, tx) => sum + convertValue(tx.commission || 0, tx.commissionCurrency || tx.currency || 'EUR', selectedCurrency, tx.date), 0);
-  const currentValAdjusted = totalNominalValue - (includeCommissions ? totalCommissionsPaid : 0);
+  const totalOtherCostsPaid = activeOtherCosts.reduce((sum, c) => sum + convertValue(c.amount || 0, c.currency || 'EUR', selectedCurrency, c.date), 0);
+  const currentValAdjusted = totalNominalValue - (includeCommissions ? (totalCommissionsPaid + totalOtherCostsPaid) : 0);
 
-  const costBasis = includeCommissions ? totalCapsWithCommissions : totalCapitalInvested;
+  const costBasis = includeCommissions ? (totalCapsWithCommissions + totalOtherCostsPaid) : totalCapitalInvested;
   const absoluteGain = currentValAdjusted - totalCapitalInvested; // Net gain: Current Adjusted - Truly Invested
   const percentageReturn = totalCapitalInvested > 0 ? (absoluteGain / totalCapitalInvested) * 100 : 0;
 
@@ -1019,6 +1065,15 @@ export default function App() {
 
       solverFlows.push({ years: yearsAgo, amount: cfAmount });
     });
+
+    if (includeCommissions) {
+      activeOtherCosts.forEach((c) => {
+        const costDate = new Date(c.date);
+        const yearsAgo = (todayMillis - costDate.getTime()) / (1000 * 60 * 60 * 24 * 365);
+        const amountInDisplay = convertValue(c.amount || 0, c.currency || 'EUR', selectedCurrency, c.date);
+        solverFlows.push({ years: yearsAgo, amount: -amountInDisplay });
+      });
+    }
 
     const f = (r: number) => {
       let sum = totalNominalValue;
@@ -1089,6 +1144,18 @@ export default function App() {
     let prevYear: number | null = null;
     let prevMonth: number | null = null;
     let cumulativeCommissions = 0;
+    let cumulativeOtherCosts = 0;
+
+    let prevDateString: string | null = null;
+    const benchOngoingHoldings: { [sym: string]: number } = {};
+    let benchNAV = 100;
+
+    const targetId = activeBenchmark;
+    const benchTxSorted = (activeBenchmark !== 'NONE' && activeBenchmark !== 'TICKER')
+      ? db.transactions
+          .filter(t => t.portfolioId === targetId || t.portfolioId === 'p-' + targetId)
+          .sort((a, b) => new Date(a.date).getTime() - new Date(b.date).getTime())
+      : [];
 
     dates.forEach((dateString) => {
       // 1. Accumulate chronological inflation step-by-step (past to present)
@@ -1162,38 +1229,76 @@ export default function App() {
         dayValue += (qty * dailyPriceInDisplay);
       });
 
+      // Accumulate other costs (taxes, fees, bolli) on this day chronologically
+      const otherCostsOnDay = activeOtherCosts.filter(c => c.date.split('T')[0] === dateString);
+      otherCostsOnDay.forEach((c) => {
+        const costInDisplay = convertValue(c.amount || 0, c.currency || 'EUR', selectedCurrency, dateString);
+        cumulativeOtherCosts += costInDisplay;
+      });
+
       // Adjust currentValue and realValueBased based on active includeCommissions setting!
-      const finalDayValue = dayValue - (includeCommissions ? cumulativeCommissions : 0);
+      const finalDayValue = dayValue - (includeCommissions ? (cumulativeCommissions + cumulativeOtherCosts) : 0);
       const realValInflatedDiscount = finalDayValue / runningInflationMultiplier;
 
-      // Benchmark normalized retrieval
+      // Calculate daily return R_t of the benchmark portfolio based on asset returns from yesterday to today
+      let benchReturn = 0;
+      if (activeBenchmark !== 'NONE' && activeBenchmark !== 'TICKER' && prevDateString) {
+        let prevHoldingsValuedAtToday = 0;
+        let prevHoldingsValuedAtYesterday = 0;
+
+        Object.keys(benchOngoingHoldings).forEach((sym) => {
+          const qty = benchOngoingHoldings[sym];
+          if (qty <= 0) return;
+
+          const tickerCurrency = getTickerCurrency(sym);
+          const priceToday = getPriceForDate(sym, dateString, 100);
+          const priceTodayInDisplay = convertValue(priceToday, tickerCurrency, selectedCurrency, dateString);
+
+          const priceYesterday = getPriceForDate(sym, prevDateString!, 100);
+          const priceYesterdayInDisplay = convertValue(priceYesterday, tickerCurrency, selectedCurrency, prevDateString!);
+
+          prevHoldingsValuedAtToday += qty * priceTodayInDisplay;
+          prevHoldingsValuedAtYesterday += qty * priceYesterdayInDisplay;
+        });
+
+        if (prevHoldingsValuedAtYesterday > 0) {
+          benchReturn = (prevHoldingsValuedAtToday - prevHoldingsValuedAtYesterday) / prevHoldingsValuedAtYesterday;
+        }
+        
+        benchNAV = benchNAV * (1 + benchReturn);
+      }
+
+      // Now update benchmark holdings with today's transactions
+      if (activeBenchmark !== 'NONE' && activeBenchmark !== 'TICKER') {
+        const benchTxsOnDay = benchTxSorted.filter(t => t.date.split('T')[0] === dateString);
+        benchTxsOnDay.forEach((tx) => {
+          const sym = tx.symbol.toUpperCase();
+          if (!benchOngoingHoldings[sym]) {
+            benchOngoingHoldings[sym] = 0;
+          }
+          if (tx.type === TransactionType.BUY) {
+            benchOngoingHoldings[sym] += tx.qty;
+          } else {
+            benchOngoingHoldings[sym] = Math.max(0, benchOngoingHoldings[sym] - tx.qty);
+          }
+        });
+      }
+
       let benchClosingNormalized = undefined;
       if (activeBenchmark === 'TICKER' && benchmarkSymbol) {
         const rawBenchPrice = getPriceForDate(benchmarkSymbol, dateString, 100);
         const benchCurr = benchmarkSymbol.toUpperCase().endsWith('.MI') ? 'EUR' : 'USD';
         benchClosingNormalized = convertValue(rawBenchPrice, benchCurr, selectedCurrency, dateString);
       } else if (activeBenchmark !== 'NONE') {
-        // Find benchmark value based on another specific portfolio or account
-        const targetId = activeBenchmark;
-        const bTx = db.transactions.filter(t => t.portfolioId === targetId || t.portfolioId === 'p-' + targetId);
-        // Solve basic weight
-        let bQtySum = 0;
-        bTx.forEach(t => {
-          if (t.date.split('T')[0] <= dateString) {
-            bQtySum += t.type === TransactionType.BUY ? t.qty : -t.qty;
-          }
-        });
-        const matchSymbol = bTx[0]?.symbol || '';
-        const matchPrice = getPriceForDate(matchSymbol, dateString, 100);
-        const matchCurrency = bTx[0]?.currency || 'EUR';
-        const matchPriceInDisplay = convertValue(matchPrice, matchCurrency, selectedCurrency, dateString);
-        benchClosingNormalized = Math.max(0, bQtySum * matchPriceInDisplay);
+        benchClosingNormalized = benchNAV;
       }
+
+      prevDateString = dateString;
 
       timeline.push({
         date: dateString,
         investedNominal: dayNominalBasis,
-        investedWithCommissions: dayCapsWithComms,
+        investedWithCommissions: dayCapsWithComms + (includeCommissions ? cumulativeOtherCosts : 0),
         currentValue: finalDayValue,
         realValueAdjusted: realValInflatedDiscount,
         benchmarkValue: benchClosingNormalized
@@ -1272,8 +1377,10 @@ export default function App() {
       const weightPercent = (val / totalNominalValue) * 100;
 
       // Deduce target weight or default to even share splits
-      const activeTargetsString = localStorage.getItem(`gainbusters_target_weight_${sym}`);
-      const targetPercent = activeTargetsString ? Number(activeTargetsString) : 0;
+      const dbTarget = db.settings?.targetWeights?.[sym];
+      const targetPercent = dbTarget !== undefined 
+        ? dbTarget 
+        : (localStorage.getItem(`gainbusters_target_weight_${sym}`) ? Number(localStorage.getItem(`gainbusters_target_weight_${sym}`)) : 0);
 
       allocations.push({
         symbol: sym,
@@ -1288,9 +1395,34 @@ export default function App() {
 
   const assetAllocation = getAssetAllocationMatrix();
 
-  const handleUpdateTargetWeight = (symbol: string, val: number) => {
-    localStorage.setItem(`gainbusters_target_weight_${symbol.toUpperCase()}`, String(val));
-    fetchDB(); // refresh calculation
+  const handleUpdateTargetWeight = async (symbol: string, val: number) => {
+    const updatedSettings = {
+      ...db.settings,
+      targetWeights: {
+        ...(db.settings?.targetWeights || {}),
+        [symbol.toUpperCase()]: val
+      }
+    };
+    const updatedDb = {
+      ...db,
+      settings: updatedSettings
+    };
+    await saveDatabaseState(updatedDb);
+  };
+
+  const handleToggleCommissions = async () => {
+    const nextVal = !includeCommissions;
+    setIncludeCommissions(nextVal);
+    
+    const updatedSettings = {
+      ...db.settings,
+      includeCommissions: nextVal
+    };
+    const updatedDb = {
+      ...db,
+      settings: updatedSettings
+    };
+    await saveDatabaseState(updatedDb);
   };
 
   // ================= GENERAL MUTATORS =================
@@ -1338,6 +1470,11 @@ export default function App() {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ transactions: newDb.transactions })
+        });
+        await fetch('/api/db/otherCosts', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ otherCosts: newDb.otherCosts || [] })
         });
       } catch (err) {
         console.error('State mutation persistence failed on local backend', err);
@@ -1571,6 +1708,139 @@ export default function App() {
     const freshTx = db.transactions.filter(t => t.id !== id);
     const updated = { ...db, transactions: freshTx };
     saveDatabaseState(updated);
+  };
+
+  // Other Costs CRUD
+  const saveCostMutation = () => {
+    if (!costForm.amount || !costForm.portfolioId || !costForm.date) return;
+    const currentCosts = db.otherCosts || [];
+    let updatedCostsList = [...currentCosts];
+
+    if (costForm.editId) {
+      updatedCostsList = updatedCostsList.map((c) => {
+        if (c.id === costForm.editId) {
+          return {
+            ...c,
+            portfolioId: costForm.portfolioId,
+            date: costForm.date,
+            amount: Number(costForm.amount),
+            currency: costForm.currency,
+            type: costForm.type,
+            notes: costForm.notes
+          };
+        }
+        return c;
+      });
+    } else {
+      const newCost = {
+        id: 'cost-' + Math.random().toString(36).substring(2, 9),
+        portfolioId: costForm.portfolioId,
+        date: costForm.date,
+        amount: Number(costForm.amount),
+        currency: costForm.currency,
+        type: costForm.type,
+        notes: costForm.notes
+      };
+      updatedCostsList.push(newCost);
+    }
+
+    const updated = { ...db, otherCosts: updatedCostsList };
+    saveDatabaseState(updated);
+    setCostForm({ open: false, editId: null, portfolioId: '', date: '', amount: 0, currency: 'EUR', type: 'bollo', notes: '' });
+  };
+
+  const deleteCostMutation = (id: string) => {
+    const currentCosts = db.otherCosts || [];
+    const freshCosts = currentCosts.filter(c => c.id !== id);
+    const updated = { ...db, otherCosts: freshCosts };
+    saveDatabaseState(updated);
+  };
+
+  const requestDeleteCost = (id: string) => {
+    setDeleteConfirm({
+      open: true,
+      type: 'cost',
+      id,
+      message: t.confirmDeleteCost
+    });
+  };
+
+  const requestDeleteAccount = (id: string) => {
+    setDeleteConfirm({
+      open: true,
+      type: 'broker',
+      id,
+      message: t.confirmDeleteBroker
+    });
+  };
+
+  const requestDeletePortfolio = (id: string) => {
+    setDeleteConfirm({
+      open: true,
+      type: 'portfolio',
+      id,
+      message: t.confirmDeletePortfolio
+    });
+  };
+
+  const requestDeleteTransaction = (id: string) => {
+    setDeleteConfirm({
+      open: true,
+      type: 'transaction',
+      id,
+      message: t.confirmDeleteTransaction
+    });
+  };
+
+  const handleConfirmDelete = () => {
+    if (deleteConfirm.type === 'broker') {
+      deleteAccountMutation(deleteConfirm.id);
+    } else if (deleteConfirm.type === 'portfolio') {
+      deletePortfolioMutation(deleteConfirm.id);
+    } else if (deleteConfirm.type === 'transaction') {
+      deleteTransactionMutation(deleteConfirm.id);
+    } else if (deleteConfirm.type === 'cost') {
+      deleteCostMutation(deleteConfirm.id);
+    }
+    setDeleteConfirm({ open: false, type: 'broker', id: '', message: '' });
+  };
+
+  const renderDeletionConfirmModal = () => {
+    if (!deleteConfirm.open) return null;
+    return (
+      <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-950/80 backdrop-blur-md animate-fade-in" dir={lang === 'ar' ? 'rtl' : 'ltr'}>
+        <div className="max-w-md w-full bg-[#0d1527] border border-rose-500/30 rounded-2xl p-6 shadow-2xl relative overflow-hidden flex flex-col">
+          <div className="absolute top-0 right-0 w-32 h-32 bg-rose-500/5 rounded-full blur-2xl pointer-events-none"></div>
+          
+          <div className="flex items-start gap-4 mb-5">
+            <span className="p-3 bg-rose-500/10 rounded-xl text-rose-400 border border-rose-500/20 shrink-0">
+              <Trash2 className="w-6 h-6 animate-pulse" />
+            </span>
+            <div className="flex-1">
+              <h3 className="text-lg font-black text-white">{t.confirmDeleteTitle}</h3>
+              <p className="text-sm text-slate-300 mt-2 font-medium leading-relaxed">{deleteConfirm.message}</p>
+            </div>
+          </div>
+          
+          <div className="flex items-center justify-end gap-3 pt-3 border-t border-slate-800/80">
+            <button
+              type="button"
+              onClick={() => setDeleteConfirm({ ...deleteConfirm, open: false })}
+              className="px-4 py-2 text-xs font-bold text-slate-400 hover:text-white bg-slate-900 border border-slate-800 hover:border-slate-700 rounded-xl transition-all cursor-pointer"
+            >
+              {t.cancelBtn}
+            </button>
+            <button
+              type="button"
+              onClick={handleConfirmDelete}
+              className="px-5 py-2 text-xs font-black text-white bg-rose-600 hover:bg-rose-500 active:bg-rose-700 rounded-xl transition-all shadow-[0_0_15px_rgba(239,68,68,0.2)] cursor-pointer"
+            >
+              {t.confirmBtn}
+            </button>
+          </div>
+        </div>
+      </div>
+    );
   };
 
   // ================= RENDER BLOCKS =================
@@ -2168,6 +2438,7 @@ export default function App() {
       accounts: pendingImport.accounts || [],
       portfolios: pendingImport.portfolios || [],
       transactions: pendingImport.transactions || [],
+      otherCosts: pendingImport.otherCosts || [],
       priceCache: pendingImport.priceCache || {}
     };
     setDb(newDb);
@@ -2179,9 +2450,18 @@ export default function App() {
     if (!pendingImport) return;
     const newDb: DBState = {
       ...db,
+      settings: {
+        ...db.settings,
+        ...(pendingImport.settings || {}),
+        targetWeights: {
+          ...(db.settings?.targetWeights || {}),
+          ...(pendingImport.settings?.targetWeights || {})
+        }
+      },
       portfolios: [...db.portfolios],
       accounts: [...db.accounts],
       transactions: [...db.transactions],
+      otherCosts: [...(db.otherCosts || [])],
       priceCache: JSON.parse(JSON.stringify(db.priceCache))
     };
 
@@ -2200,6 +2480,12 @@ export default function App() {
     if (pendingImport.transactions) {
       pendingImport.transactions.forEach((tx: Transaction) => {
         if (!newDb.transactions.find(ex => ex.id === tx.id)) newDb.transactions.push(tx);
+      });
+    }
+
+    if (pendingImport.otherCosts) {
+      pendingImport.otherCosts.forEach((c: any) => {
+        if (!newDb.otherCosts!.find(ex => ex.id === c.id)) newDb.otherCosts!.push(c);
       });
     }
 
@@ -2340,9 +2626,10 @@ export default function App() {
               {[
                 { id: 'dashboard', label: t.dashboard, icon: Home },
                 { id: 'brokers', label: t.accountsPortfolios, icon: Briefcase },
+                { id: 'otherCosts', label: t.otherCostsTab, icon: Percent },                
+                { id: 'inflation', label: t.inflationTitle, icon: TrendingUp },
                 { id: 'tools', label: t.tools, icon: Calculator },
                 { id: 'mission', label: t.mission, icon: Coins },
-                { id: 'inflation', label: t.inflationTitle, icon: TrendingUp },
                 { id: 'settings', label: t.settings, icon: SettingsIcon },
               ].map((item) => {
                 const IconComponent = item.icon;
@@ -2605,7 +2892,7 @@ export default function App() {
                     <Percent className="w-4 h-4 text-slate-500" />
                   </div>
                   <div className="text-lg md:text-xl font-black text-rose-400 font-mono break-words select-text pt-1">
-                    {formatCurrency(totalCommissionsPaid, selectedCurrency)}
+                    {formatCurrency(totalCommissionsPaid + totalOtherCostsPaid, selectedCurrency)}
                   </div>
                   <div className="text-[10px] text-slate-500 font-mono tracking-wider uppercase font-bold pb-1">
                     {t.declaredBrokerFeesLabel}
@@ -2666,7 +2953,7 @@ export default function App() {
                 </span>
                 <button
                   type="button"
-                  onClick={() => setIncludeCommissions(!includeCommissions)}
+                  onClick={handleToggleCommissions}
                   className={`py-1.5 px-3.5 text-xs font-bold rounded-xl border transition-all duration-300 cursor-pointer ${
                     includeCommissions
                       ? 'bg-emerald-500/10 border-emerald-500/30 text-emerald-400 hover:bg-emerald-500/20'
@@ -2698,6 +2985,9 @@ export default function App() {
                   window.scrollTo({ top: 0, behavior: 'smooth' });
                 }}
                 activeTxSorted={activeTxSorted}
+                activeOtherCosts={activeOtherCosts}
+                convertValue={convertValue}
+                selectedCurrency={selectedCurrency}
                 inflationIndices={db.settings.inflationIndices}
                 selectedInflationId={db.settings.selectedInflationId || 'NIC'}
                 onSelectInflationId={(id) => {
@@ -2903,7 +3193,7 @@ export default function App() {
                               <Edit className="w-4 h-4" />
                             </button>
                             <button
-                              onClick={() => deleteAccountMutation(acc.id)}
+                              onClick={() => requestDeleteAccount(acc.id)}
                               className="text-slate-400 hover:text-rose-400 transition p-1 hover:bg-rose-950/20 rounded-lg cursor-pointer"
                               title={t.deleteAccount}
                             >
@@ -2948,7 +3238,7 @@ export default function App() {
                                         <Edit className="w-3.5 h-3.5" />
                                       </button>
                                       <button
-                                        onClick={() => deletePortfolioMutation(port.id)}
+                                        onClick={() => requestDeletePortfolio(port.id)}
                                         className="text-slate-500 hover:text-rose-400 p-1 rounded hover:bg-rose-950/20 transition-colors font-bold cursor-pointer"
                                       >
                                         <Trash2 className="w-3.5 h-3.5" />
@@ -3404,7 +3694,7 @@ export default function App() {
                                     <Edit className="w-3.5 h-3.5" />
                                   </button>
                                   <button
-                                    onClick={() => deleteTransactionMutation(tx.id)}
+                                    onClick={() => requestDeleteTransaction(tx.id)}
                                     className="text-slate-500 hover:text-rose-400 p-1 rounded hover:bg-rose-950/20 transition-colors duration-250 cursor-pointer"
                                     title={t.deleteTransaction}
                                   >
@@ -3466,7 +3756,7 @@ export default function App() {
                               <button onClick={() => { setTxForm({ open: true, editId: tx.id, portfolioId: tx.portfolioId, date: tx.date.substring(0, 16), type: tx.type, symbol: tx.symbol, qty: tx.qty, price: tx.price, currency: tx.currency || db.settings.defaultCurrency || 'EUR', commission: tx.commission, notes: tx.notes || '' }); window.scrollTo({ top: 0, behavior: 'smooth' }); }} className="p-1.5 bg-slate-800 text-slate-300 rounded hover:bg-emerald-600 hover:text-white transition">
                                 <Edit className="w-3.5 h-3.5" />
                               </button>
-                              <button onClick={() => deleteTransactionMutation(tx.id)} className="p-1.5 bg-slate-800 text-slate-300 rounded hover:bg-rose-600 hover:text-white transition">
+                              <button onClick={() => requestDeleteTransaction(tx.id)} className="p-1.5 bg-slate-800 text-slate-300 rounded hover:bg-rose-600 hover:text-white transition">
                                 <Trash2 className="w-3.5 h-3.5" />
                               </button>
                             </div>
@@ -3517,6 +3807,21 @@ export default function App() {
                 )}
               </div>
             </div>
+          )}
+
+          {/* TAB: OTHER COSTS (FEES & TAXES) */}
+          {activeTab === 'otherCosts' && (
+            <OtherCostsPage
+              t={t}
+              db={db}
+              selectedCurrency={selectedCurrency}
+              convertValue={convertValue}
+              costForm={costForm}
+              setCostForm={setCostForm}
+              saveCostMutation={saveCostMutation}
+              requestDeleteCost={requestDeleteCost}
+              lang={lang}
+            />
           )}
 
           {/* TAB 4: CALCULATING INTEREST COMPOUND / PAC UTILITIES */}
@@ -3851,6 +4156,9 @@ export default function App() {
 
       {/* Interactive Regulatory & Legal Disclaimer Modal */}
       {renderLegalDisclaimerModal()}
+
+      {/* Safety Deletion Confirmation Modal */}
+      {renderDeletionConfirmModal()}
     </div>
   );
 }

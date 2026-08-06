@@ -21,6 +21,7 @@ export const InflationPage: React.FC<InflationPageProps> = ({
   const [selectedId, setSelectedId] = useState(db.settings.selectedInflationId || 'NIC');
   const [activeYearFilter, setActiveYearFilter] = useState(new Date().getFullYear());
   const [saveSuccessMsg, setSaveSuccessMsg] = useState('');
+  const [indexToDelete, setIndexToDelete] = useState<string | null>(null);
 
   // Selected Index
   const activeIndex = db.settings.inflationIndices.find(idx => idx?.id === selectedId) || db.settings.inflationIndices[0];
@@ -57,7 +58,7 @@ export const InflationPage: React.FC<InflationPageProps> = ({
     setTimeout(() => setSaveSuccessMsg(''), 3000);
   };
 
-  const handleDeleteIndex = (idToDelete: string) => {
+  const executeDeleteIndex = (idToDelete: string) => {
     const updatedIndices = db.settings.inflationIndices.filter(idx => idx.id !== idToDelete);
     let fallbackId = db.settings.selectedInflationId;
     if (fallbackId === idToDelete) {
@@ -224,7 +225,7 @@ export const InflationPage: React.FC<InflationPageProps> = ({
                         )}
                       </button>
                       <button
-                        onClick={() => handleDeleteIndex(inf.id)}
+                        onClick={() => setIndexToDelete(inf.id)}
                         className="text-rose-400 hover:text-rose-500 p-1 rounded-lg hover:bg-rose-500/10 transition cursor-pointer shrink-0"
                         title={t.deleteIndexTooltip}
                       >
@@ -409,6 +410,44 @@ export const InflationPage: React.FC<InflationPageProps> = ({
           )}
         </div>
       </div>
+
+      {indexToDelete && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-950/80 backdrop-blur-md animate-fade-in">
+          <div className="max-w-md w-full bg-[#0d1527] border border-rose-500/30 rounded-2xl p-6 shadow-2xl relative overflow-hidden flex flex-col">
+            <div className="absolute top-0 right-0 w-32 h-32 bg-rose-500/5 rounded-full blur-2xl pointer-events-none"></div>
+            
+            <div className="flex items-start gap-4 mb-5">
+              <span className="p-3 bg-rose-500/10 rounded-xl text-rose-400 border border-rose-500/20 shrink-0">
+                <Trash2 className="w-6 h-6 animate-pulse" />
+              </span>
+              <div className="flex-1">
+                <h3 className="text-lg font-black text-white">{t.confirmDeleteTitle}</h3>
+                <p className="text-sm text-slate-300 mt-2 font-medium leading-relaxed">{t.confirmDeleteIndex}</p>
+              </div>
+            </div>
+            
+            <div className="flex items-center justify-end gap-3 pt-3 border-t border-slate-800/80">
+              <button
+                type="button"
+                onClick={() => setIndexToDelete(null)}
+                className="px-4 py-2 text-xs font-bold text-slate-400 hover:text-white bg-slate-900 border border-slate-800 hover:border-slate-700 rounded-xl transition-all cursor-pointer"
+              >
+                {t.cancelBtn}
+              </button>
+              <button
+                type="button"
+                onClick={() => {
+                  executeDeleteIndex(indexToDelete);
+                  setIndexToDelete(null);
+                }}
+                className="px-5 py-2 text-xs font-black text-white bg-rose-600 hover:bg-rose-500 active:bg-rose-700 rounded-xl transition-all shadow-[0_0_15px_rgba(239,68,68,0.2)] cursor-pointer"
+              >
+                {t.confirmBtn}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 };

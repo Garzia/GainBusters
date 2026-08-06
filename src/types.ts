@@ -41,6 +41,16 @@ export interface Transaction {
   notes: string;
 }
 
+export interface OtherCost {
+  id: string;
+  portfolioId: string;
+  date: string; // ISO String (Date & time or YYYY-MM-DD)
+  amount: number;
+  currency: Currency | string;
+  type: 'bollo' | 'custody' | 'tax' | 'other';
+  notes: string;
+}
+
 export interface InflationIndex {
   year: number;
   month?: number; // Optional 1-12 for monthly MoM inflation rate
@@ -64,6 +74,8 @@ export interface SystemSettings {
   inflationIndices: InflationSetting[];
   activeCurrencies?: string[];
   lang?: string;
+  includeCommissions?: boolean;
+  targetWeights?: { [symbol: string]: number };
 }
 
 export interface DBState {
@@ -71,6 +83,7 @@ export interface DBState {
   accounts: Account[];
   portfolios: Portfolio[];
   transactions: Transaction[];
+  otherCosts?: OtherCost[];
   priceCache: {
     // Ticker -> Date (YYYY-MM-DD) -> Price
     [ticker: string]: { [date: string]: number };
@@ -478,6 +491,30 @@ export interface LanguagePhrases {
   disclaimerText1: string;
   disclaimerText2: string;
   disclaimerAcknowledge: string;
+  confirmDeleteTitle: string;
+  confirmDeleteBroker: string;
+  confirmDeletePortfolio: string;
+  confirmDeleteTransaction: string;
+  confirmDeleteIndex: string;
+  confirmBtn: string;
+  cancelBtn: string;
+  otherCostsTab: string;
+  addCostBtn: string;
+  editCostBtn: string;
+  costType: string;
+  costAmount: string;
+  costDate: string;
+  costNotes: string;
+  stampDuty: string;
+  custodyFee: string;
+  otherTax: string;
+  otherCostType: string;
+  confirmDeleteCost: string;
+  allCosts: string;
+  totalCostsPaid: string;
+  costSelection: string;
+  costSuccessMsg: string;
+  noCostsMsg: string;
 }
 
 export interface TranslationDictionary {

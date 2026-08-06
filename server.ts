@@ -88,6 +88,7 @@ const initialDB = {
   accounts: [],
   portfolios: [],
   transactions: [],
+  otherCosts: [],
   priceCache: {}
 };
 
@@ -113,7 +114,11 @@ function readDB() {
       mergedSettings.inflationIndices = initialDB.settings.inflationIndices;
     }
 
-    return { ...initialDB, ...data, settings: mergedSettings };
+    const result = { ...initialDB, ...data, settings: mergedSettings };
+    if (!result.otherCosts) {
+      result.otherCosts = [];
+    }
+    return result;
   } catch (error) {
     console.error('Error reading index database:', error);
     return initialDB;
@@ -200,13 +205,14 @@ app.get('/api/db', (req, res) => {
 });
 
 app.post('/api/db/settings', (req, res) => {
-  const { theme, defaultCurrency, selectedInflationId, inflationIndices, activeCurrencies } = req.body;
+  const { theme, defaultCurrency, selectedInflationId, inflationIndices, activeCurrencies, targetWeights } = req.body;
   const db = readDB();
-  if (theme) db.settings.theme = theme;
-  if (defaultCurrency) db.settings.defaultCurrency = defaultCurrency;
-  if (selectedInflationId) db.settings.selectedInflationId = selectedInflationId;
-  if (inflationIndices) db.settings.inflationIndices = inflationIndices;
-  if (activeCurrencies) db.settings.activeCurrencies = activeCurrencies;
+  if (theme !== undefined) db.settings.theme = theme;
+  if (defaultCurrency !== undefined) db.settings.defaultCurrency = defaultCurrency;
+  if (selectedInflationId !== undefined) db.settings.selectedInflationId = selectedInflationId;
+  if (inflationIndices !== undefined) db.settings.inflationIndices = inflationIndices;
+  if (activeCurrencies !== undefined) db.settings.activeCurrencies = activeCurrencies;
+  if (targetWeights !== undefined) db.settings.targetWeights = targetWeights;
   writeDB(db);
   res.json({ success: true });
 });
@@ -240,6 +246,17 @@ app.post('/api/db/transactions', (req, res) => {
   }
   const db = readDB();
   db.transactions = transactions;
+  writeDB(db);
+  res.json({ success: true });
+});
+
+app.post('/api/db/otherCosts', (req, res) => {
+  const { otherCosts } = req.body;
+  if (!Array.isArray(otherCosts)) {
+    return res.status(400).json({ error: 'Invalid otherCosts list.' });
+  }
+  const db = readDB();
+  db.otherCosts = otherCosts;
   writeDB(db);
   res.json({ success: true });
 });

@@ -35,6 +35,9 @@ interface InteractiveChartProps {
   onUpdateTargetWeight: (symbol: string, val: number) => void;
   onSelectTicker?: (sym: string) => void;
   activeTxSorted?: any[];
+  activeOtherCosts?: any[];
+  convertValue?: (val: number, from: string, to: string, date: string) => number;
+  selectedCurrency?: string;
   inflationIndices?: any[];
   selectedInflationId?: string;
   onSelectInflationId?: (id: string) => void;
@@ -57,6 +60,9 @@ export default function InteractiveChart({
   onUpdateTargetWeight,
   onSelectTicker,
   activeTxSorted = [],
+  activeOtherCosts = [],
+  convertValue,
+  selectedCurrency,
   inflationIndices = [],
   selectedInflationId = '',
   onSelectInflationId
@@ -65,6 +71,14 @@ export default function InteractiveChart({
   const [customStartDate, setCustomStartDate] = useState<string>('');
   const [customEndDate, setCustomEndDate] = useState<string>('');
   const [hoverIndex, setHoverIndex] = useState<number | null>(null);
+
+  const getDaysBetween = (startStr: string, endStr: string) => {
+    if (!startStr || !endStr) return 0;
+    const s = new Date(startStr);
+    const e = new Date(endStr);
+    const diffTime = Math.abs(e.getTime() - s.getTime());
+    return Math.ceil(diffTime / (1000 * 60 * 60 * 24)) + 1; // inclusive of start and end day
+  };
 
   // Parse custom dates and apply timeframe filtering
   const today = new Date();
@@ -133,15 +147,30 @@ export default function InteractiveChart({
       ? filteredBalances[0].realValueAdjusted 
       : filteredBalances[0].currentValue;
     
-    // We assuming benchmark is represented proportionally
-    // Let's modify bench tracking so it starts alongside currentValue
+    // Track synthetic benchmark portfolio with cash flows (Direct Alpha / PME style)
+    let benchShares = 0;
+    const firstBenchVal = filteredBalances[0].benchmarkValue;
+    if (firstBenchVal && firstBenchVal > 0) {
+      benchShares = baseValue / firstBenchVal;
+    }
+
     return filteredBalances.map((b, i) => {
       let benchProcessed: number | undefined = undefined;
-      // If we have bench info
-      if (b.benchmarkValue && filteredBalances[0].benchmarkValue) {
-        const benchRatio = b.benchmarkValue / filteredBalances[0].benchmarkValue;
-        benchProcessed = baseValue * benchRatio;
+      
+      if (b.benchmarkValue && b.benchmarkValue > 0) {
+        if (i > 0) {
+          const prevB = filteredBalances[i - 1];
+          // Get the net cash flow of our main portfolio on this day (adapt to includeCommissions)
+          const currentInvested = includeCommissions ? b.investedWithCommissions : b.investedNominal;
+          const prevInvested = includeCommissions ? prevB.investedWithCommissions : prevB.investedNominal;
+          const cashFlow = currentInvested - prevInvested;
+          
+          // Buy or sell benchmark shares using this cash flow at today's benchmark price
+          benchShares += cashFlow / b.benchmarkValue;
+        }
+        benchProcessed = benchShares * b.benchmarkValue;
       }
+      
       return {
         ...b,
         benchNormalized: benchProcessed
@@ -150,6 +179,21 @@ export default function InteractiveChart({
   };
 
   const renderBalances = prepareRenderBalances();
+
+  const totalDays = renderBalances.length > 0 
+    ? getDaysBetween(renderBalances[0].date, renderBalances[renderBalances.length - 1].date)
+    : 0;
+
+  const getPeriodDaysLabel = () => {
+    switch (lang) {
+      case 'it': return `${totalDays} giorni`;
+      case 'es': return `${totalDays} días`;
+      case 'fr': return `${totalDays} jours`;
+      case 'zh': return `${totalDays} 天`;
+      case 'ar': return `${totalDays} يوم`;
+      default: return `${totalDays} days`;
+    }
+  };
 
   // Find max and min values to scale the chart correctly
   const getChartScale = () => {
@@ -213,8 +257,32 @@ export default function InteractiveChart({
     .filter(tx => tx.type === 'BUY')
     .reduce((sum, tx) => sum + (tx.qty * tx.price), 0);
 
-  const periodCommissions = periodTransactions
-    .reduce((sum, tx) => sum + (tx.commission || 0), 0);
+  const periodTxCommissions = periodTransactions
+    .reduce((sum, tx) => {
+      const commVal = tx.commission || 0;
+      if (convertValue && selectedCurrency) {
+        return sum + convertValue(commVal, tx.commissionCurrency || tx.currency || 'EUR', selectedCurrency, tx.date);
+      }
+      return sum + commVal;
+    }, 0);
+
+  const periodOtherCostsSum = (activeOtherCosts || [])
+    .filter(c => {
+      if (renderBalances.length === 0) return false;
+      const firstDateStr = renderBalances[0].date;
+      const lastDateStr = renderBalances[renderBalances.length - 1].date;
+      const costDateStr = c.date.split('T')[0];
+      return costDateStr >= firstDateStr && costDateStr <= lastDateStr;
+    })
+    .reduce((sum, c) => {
+      const amt = c.amount || 0;
+      if (convertValue && selectedCurrency) {
+        return sum + convertValue(amt, c.currency || 'EUR', selectedCurrency, c.date);
+      }
+      return sum + amt;
+    }, 0);
+
+  const periodCommissions = periodTxCommissions + periodOtherCostsSum;
 
   const periodSells = periodTransactions
     .filter(tx => tx.type === 'SELL')
@@ -404,9 +472,18 @@ export default function InteractiveChart({
       {/* Chart container card */}
       <div className="bg-slate-900/50 p-6 rounded-2xl border border-slate-800 space-y-6">
         <div className="flex flex-col md:flex-row md:items-center justify-between gap-4 border-b border-slate-800 pb-4">
-          <div className="flex items-center gap-2">
-            <LineChart className="w-5 h-5 text-green-500" />
-            <h2 className="text-lg font-bold text-white">{t.historicalCapitalTrend}</h2>
+          <div className="flex flex-col gap-1">
+            <div className="flex items-center gap-2">
+              <LineChart className="w-5 h-5 text-green-500" />
+              <h2 className="text-lg font-bold text-white">{t.historicalCapitalTrend}</h2>
+            </div>
+            {renderBalances.length > 0 && (
+              <span className="text-xs text-slate-400 font-mono">
+                {lang === 'it'
+                  ? `Periodo analizzato: ${getPeriodDaysLabel()} (${formatDateString(renderBalances[0].date, lang)} - ${formatDateString(renderBalances[renderBalances.length - 1].date, lang)})`
+                  : `Analyzed period: ${getPeriodDaysLabel()} (${formatDateString(renderBalances[0].date, lang)} - ${formatDateString(renderBalances[renderBalances.length - 1].date, lang)})`}
+              </span>
+            )}
           </div>
 
           {/* Timeframe selector bar */}
@@ -460,7 +537,16 @@ export default function InteractiveChart({
               <div className="bg-slate-950/90 border border-slate-800 p-3 rounded-lg flex flex-wrap gap-4 text-xs font-mono justify-between mb-2">
                 <div>
                   <span className="text-slate-500">{t.dateColonLabel} </span>
-                  <span className="text-white font-semibold">{formatDateString(activeHoverData.date, lang)}</span>
+                  <span className="text-white font-semibold">
+                    {hoverIndex !== null 
+                      ? formatDateString(activeHoverData.date, lang)
+                      : `${formatDateString(renderBalances[0].date, lang)} - ${formatDateString(activeHoverData.date, lang)}`}
+                  </span>
+                  {hoverIndex === null && (
+                    <span className="text-slate-400 text-[10px] ml-2 font-semibold">
+                      ({getPeriodDaysLabel()})
+                    </span>
+                  )}
                 </div>
                 <div>
                   <span className="text-slate-500">{t.nominalCapitalLabel} </span>
