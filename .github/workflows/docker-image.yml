@@ -3,6 +3,7 @@ name: Build and Push to Docker Hub
 on:
   push:
     branches: [ "main" ] # Cambia in "master" se usi master
+  workflow_dispatch: # <--- AGGIUNGI QUESTA RIGA PER IL TRIGGER MANUALE
 
 jobs:
   build-and-push:
