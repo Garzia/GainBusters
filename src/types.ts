@@ -10,7 +10,9 @@ export enum Currency {
 
 export enum TransactionType {
   BUY = 'BUY',
-  SELL = 'SELL'
+  SELL = 'SELL',
+  TRANSFER_IN = 'TRANSFER_IN',
+  TRANSFER_OUT = 'TRANSFER_OUT'
 }
 
 export interface Account {
@@ -39,6 +41,33 @@ export interface Transaction {
   currency: Currency | string;
   commissionCurrency?: string;
   notes: string;
+  transferId?: string; // Links transaction to its unified Transfer entity
+  parentTransactionId?: string; // Links to parent lot tx (BUY or TRANSFER_IN)
+  transferInTransactionId?: string; // Links TRANSFER_OUT to TRANSFER_IN
+  transferOutTransactionId?: string; // Links TRANSFER_IN to TRANSFER_OUT
+  originalBuyPrice?: number; // Preserves purchase cost basis during transfers
+  originalBuyDate?: string; // Preserves purchase date during transfers
+  transferCriteria?: 'FIFO' | 'LIFO'; // Preserves selection criteria
+}
+
+export interface Transfer {
+  id: string;
+  date: string; // ISO String
+  symbol: string;
+  qty: number;
+  price?: number;
+  priceCurrency?: Currency | string;
+  sourcePortfolioId: string;
+  destPortfolioId: string;
+  sourceCommission?: number;
+  sourceCommissionCurrency?: string;
+  destCommission?: number;
+  destCommissionCurrency?: string;
+  criteria: 'FIFO' | 'LIFO';
+  notes?: string;
+  childTransactionIds?: string[];
+  transferOutTransactionId?: string;
+  transferInTransactionId?: string;
 }
 
 export interface OtherCost {
@@ -76,6 +105,7 @@ export interface SystemSettings {
   lang?: string;
   includeCommissions?: boolean;
   targetWeights?: { [symbol: string]: number };
+  columnWidths?: { [columnId: string]: number };
 }
 
 export interface DBState {
@@ -83,6 +113,7 @@ export interface DBState {
   accounts: Account[];
   portfolios: Portfolio[];
   transactions: Transaction[];
+  transfers?: Transfer[];
   otherCosts?: OtherCost[];
   priceCache: {
     // Ticker -> Date (YYYY-MM-DD) -> Price
@@ -115,8 +146,40 @@ export interface LanguagePhrases {
   totalReturn: string;
   dailyChange: string;
   annualizedReturn: string;
+  twrrReturn: string;
+  mwrrReturn: string;
   volatility: string;
   maxDrawdown: string;
+  positionsSectionTitle: string;
+  positionsSectionDesc: string;
+  colTicker: string;
+  colQuantity: string;
+  colPmc: string;
+  colCurrentPrice: string;
+  colMarketValue: string;
+  colProfitLossAbs: string;
+  colProfitLossPct: string;
+  colPortfolioWeight: string;
+  colDailyChange: string;
+  searchPositionsPlaceholder: string;
+  openLotsTitle: string;
+  lotOriginalDate: string;
+  lotPortfolio: string;
+  lotRemainingQty: string;
+  lotPurchasePrice: string;
+  lotTotalInvested: string;
+  lotCurrentValue: string;
+  lotGainLoss: string;
+  noPositionsFound: string;
+  totalPositionsSummary: string;
+  pmcTooltip: string;
+  sortByName: string;
+  sortByValue: string;
+  sortByGain: string;
+  sortByPmc: string;
+  sortByWeight: string;
+  expandLotDetails: string;
+  collapseLotDetails: string;
   includeCommissions: string;
   excludeCommissions: string;
   benchmarkSelect: string;
@@ -515,6 +578,61 @@ export interface LanguagePhrases {
   costSelection: string;
   costSuccessMsg: string;
   noCostsMsg: string;
+  transferBtn: string;
+  sourcePortfolioLabel: string;
+  destPortfolioLabel: string;
+  transferQtyLabel: string;
+  transferDateLabel: string;
+  lotSelectionCriteria: string;
+  availableQtyNotice: string;
+  transferSuccessMsg: string;
+  insufficientQtyError: string;
+  samePortfolioError: string;
+  lotBadgePartial: string;
+  lotBadgeFully: string;
+  transferInBadge: string;
+  transferOutBadge: string;
+  viewConnectedTx: string;
+  lotDetailTooltip: string;
+  confirmDeleteTransfer: string;
+  transfersRegistryTitle: string;
+  sourceBrokerAndPortfolio: string;
+  destBrokerAndPortfolio: string;
+  sourceCommissionLabel: string;
+  destCommissionLabel: string;
+  sourceCommissionCurrencyLabel: string;
+  destCommissionCurrencyLabel: string;
+  transferUnitPriceLabel: string;
+  transferUnitPricePlaceholder: string;
+  noTransfersRecorded: string;
+  editTransferModalTitle: string;
+  newTransferModalTitle: string;
+  editTransactionModalTitle: string;
+  newTransactionModalTitle: string;
+  totalTransferredLabel: string;
+  columnsLabel: string;
+  actionsLabel: string;
+  closeLabel: string;
+  cryptoConversionNote: string;
+  otherCostsDesc: string;
+  allPortfolios: string;
+  allTypes: string;
+  searchNotesPlaceholder: string;
+  recordsFound: string;
+  otherCostsCalcNote: string;
+  internalAssetMovement: string;
+  newTransferBtn: string;
+  registerFirstTransferMsg: string;
+  transfersRecordedCount: string;
+  totalsLabel: string;
+  allTimeframe: string;
+  customTimeframe: string;
+  analyzedPeriod: string;
+  valoreLabel: string;
+  infoPmc: string;
+  pmcFullTitle: string;
+  createFirstTransfer: string;
+  transfersCountLabel: string;
 }
 
 export interface TranslationDictionary {

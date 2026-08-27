@@ -88,6 +88,7 @@ const initialDB = {
   accounts: [],
   portfolios: [],
   transactions: [],
+  transfers: [],
   otherCosts: [],
   priceCache: {}
 };
@@ -115,6 +116,9 @@ function readDB() {
     }
 
     const result = { ...initialDB, ...data, settings: mergedSettings };
+    if (!result.transfers) {
+      result.transfers = [];
+    }
     if (!result.otherCosts) {
       result.otherCosts = [];
     }
@@ -250,6 +254,17 @@ app.post('/api/db/transactions', (req, res) => {
   res.json({ success: true });
 });
 
+app.post('/api/db/transfers', (req, res) => {
+  const { transfers } = req.body;
+  if (!Array.isArray(transfers)) {
+    return res.status(400).json({ error: 'Invalid transfers list.' });
+  }
+  const db = readDB();
+  db.transfers = transfers;
+  writeDB(db);
+  res.json({ success: true });
+});
+
 app.post('/api/db/otherCosts', (req, res) => {
   const { otherCosts } = req.body;
   if (!Array.isArray(otherCosts)) {
@@ -261,7 +276,7 @@ app.post('/api/db/otherCosts', (req, res) => {
   res.json({ success: true });
 });
 
-// ================= STOCK PRICE SYNC & TRACKING ENGINE =================
+// ================= STOCK & CRYPTO PRICE SYNC & TRACKING ENGINE =================
 
 // Proxy Yahoo Finance requests from the client to bypass CORS
 app.get('/api/yahoo/:symbol', (req, res) => {
@@ -283,6 +298,30 @@ app.get('/api/yahoo/:symbol', (req, res) => {
       res.setHeader('Content-Type', yahooRes.headers['content-type']);
     }
     yahooRes.pipe(res);
+  }).on('error', (err) => {
+    res.status(500).json({ error: err.message });
+  });
+});
+
+// Proxy Binance crypto price requests to bypass CORS
+app.get('/api/crypto/:pair', (req, res) => {
+  const pair = req.params.pair;
+  const queryString = new URLSearchParams(req.query as Record<string, string>).toString();
+  const url = `https://api.binance.com/api/v3/klines?symbol=${encodeURIComponent(pair)}&${queryString}`;
+
+  const options = {
+    headers: {
+      'User-Agent': 'GainBusters/1.0',
+      'Accept': 'application/json'
+    }
+  };
+
+  https.get(url, options, (binanceRes) => {
+    res.status(binanceRes.statusCode || 200);
+    if (binanceRes.headers['content-type']) {
+      res.setHeader('Content-Type', binanceRes.headers['content-type']);
+    }
+    binanceRes.pipe(res);
   }).on('error', (err) => {
     res.status(500).json({ error: err.message });
   });

@@ -3,9 +3,9 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import React, { useState, useEffect, useRef } from 'react';
+import React, { useState, useEffect, useRef, useMemo } from 'react';
 import { translations } from './locales/index.ts';
-import { Currency, DBState, Account, Portfolio, Transaction, TransactionType } from './types.ts';
+import { Currency, DBState, Account, Portfolio, Transaction, TransactionType, Transfer } from './types.ts';
 import { encryptData, decryptData } from './utils/crypto.ts';
 import { saveFileHandleInIndexedDB, getFileHandleFromIndexedDB, clearFileHandleFromIndexedDB } from './utils/indexedDB.ts';
 import { syncPricesLocally } from './utils/syncPrices.ts';
@@ -14,8 +14,18 @@ import ToolsPage from './components/ToolsPage.tsx';
 import OtherCostsPage from './components/OtherCostsPage.tsx';
 import { InflationPage } from './components/InflationPage.tsx';
 import InteractiveChart, { DailyBalance } from './components/InteractiveChart.tsx';
+import { PositionsTable } from './components/PositionsTable.tsx';
 import { TickerInput } from './components/TickerInput.tsx';
+import { TransactionModal } from './components/TransactionModal.tsx';
+import { TransferModal } from './components/TransferModal.tsx';
+import { TransfersTable, TransferRecord } from './components/TransfersTable.tsx';
 import { formatDateString } from './utils.ts';
+import {
+  calculateHoldingsAndLots,
+  calculateFinancialMetrics,
+  calculateTransactionTableTotals,
+  calculatePortfolioPerformance
+} from './utils/finance.ts';
 import {
   Home,
   Briefcase,
@@ -127,6 +137,12 @@ export function formatCurrency(value: number, currencyCode: string): string {
   }
 }
 
+export function formatQuantity(qty: number): string {
+  if (qty % 1 === 0) return qty.toString();
+  // Keep up to 8 decimal places and strip trailing zeros
+  return qty.toFixed(8).replace(/\.?0+$/, '');
+}
+
 export default function App() {
   const [lang, setLang] = useState<string>('it');
   const [storageMode, setStorageMode] = useState<'local' | 'browser'>('browser');
@@ -159,6 +175,7 @@ export default function App() {
     accounts: [],
     portfolios: [],
     transactions: [],
+    transfers: [],
     otherCosts: [],
     priceCache: {}
   });
@@ -193,8 +210,41 @@ export default function App() {
   const [portfolioForm, setPortfolioForm] = useState<{ open: boolean; editId: string | null; accountId: string; name: string; include: boolean }>({
     open: false, editId: null, accountId: '', name: '', include: true
   });
-  const [txForm, setTxForm] = useState<{ open: boolean; editId: string | null; portfolioId: string; date: string; type: TransactionType; symbol: string; qty: number; price: number; commission: number; currency: string; commissionCurrency: string; notes: string }>({
-    open: false, editId: null, portfolioId: '', date: '', type: TransactionType.BUY, symbol: '', qty: 0, price: 0, commission: 0, currency: 'EUR', commissionCurrency: 'EUR', notes: ''
+  const [txForm, setTxForm] = useState<{ open: boolean; editId: string | null; portfolioId: string; date: string; type: TransactionType; symbol: string; qty: number | string; price: number | string; commission: number | string; currency: string; commissionCurrency: string; notes: string }>({
+    open: false, editId: null, portfolioId: '', date: '', type: TransactionType.BUY, symbol: '', qty: '', price: '', commission: '', currency: 'EUR', commissionCurrency: 'EUR', notes: ''
+  });
+  const [transferForm, setTransferForm] = useState<{
+    open: boolean;
+    editTransferId?: string | null;
+    sourcePortfolioId: string;
+    destPortfolioId: string;
+    symbol: string;
+    qty: number | string;
+    price: number | string;
+    priceCurrency: string;
+    sourceCommission: number | string;
+    sourceCommissionCurrency: string;
+    destCommission: number | string;
+    destCommissionCurrency: string;
+    date: string;
+    criteria: 'FIFO' | 'LIFO';
+    notes: string;
+  }>({
+    open: false,
+    editTransferId: null,
+    sourcePortfolioId: '',
+    destPortfolioId: '',
+    symbol: '',
+    qty: '',
+    price: '',
+    priceCurrency: 'EUR',
+    sourceCommission: '',
+    sourceCommissionCurrency: 'EUR',
+    destCommission: '',
+    destCommissionCurrency: 'EUR',
+    date: new Date().toISOString().substring(0, 16),
+    criteria: 'FIFO',
+    notes: ''
   });
   const [costForm, setCostForm] = useState<{
     open: boolean;
@@ -216,15 +266,103 @@ export default function App() {
     notes: ''
   });
 
+  // Column Resizing Preferences
+  const defaultColumnWidths: { [col: string]: number } = {
+    date: 110,
+    portfolio: 140,
+    type: 130,
+    symbol: 110,
+    qty: 120,
+    price: 110,
+    total: 110,
+    currentValue: 130,
+    commission: 110,
+    notes: 160,
+    actions: 90
+  };
+
+  const [columnWidths, setColumnWidths] = useState<{ [col: string]: number }>(() => {
+    return db.settings?.columnWidths || defaultColumnWidths;
+  });
+
+  useEffect(() => {
+    if (db.settings?.columnWidths) {
+      setColumnWidths(db.settings.columnWidths);
+    }
+  }, [db.settings?.columnWidths]);
+
+  const handleMouseDownResize = (colId: string, e: React.MouseEvent) => {
+    e.preventDefault();
+    e.stopPropagation();
+    const startX = e.clientX;
+    const startWidth = columnWidths[colId] || defaultColumnWidths[colId] || 100;
+
+    const onMouseMove = (moveEvent: MouseEvent) => {
+      const newWidth = Math.max(50, startWidth + (moveEvent.clientX - startX));
+      setColumnWidths(prev => ({ ...prev, [colId]: newWidth }));
+    };
+
+    const onMouseUp = (upEvent: MouseEvent) => {
+      document.removeEventListener('mousemove', onMouseMove);
+      document.removeEventListener('mouseup', onMouseUp);
+      const finalWidth = Math.max(50, startWidth + (upEvent.clientX - startX));
+      setColumnWidths(prev => {
+        const updatedWidths = { ...prev, [colId]: finalWidth };
+        const updatedDb = {
+          ...db,
+          settings: {
+            ...db.settings,
+            columnWidths: updatedWidths
+          }
+        };
+        saveDatabaseState(updatedDb);
+        return updatedWidths;
+      });
+    };
+
+    document.addEventListener('mousemove', onMouseMove);
+    document.addEventListener('mouseup', onMouseUp);
+  };
+
+  const formatFullQuantity = (qty: number | string | undefined | null): string => {
+    if (qty === undefined || qty === null || qty === '') return '0';
+    const num = Number(qty);
+    if (isNaN(num)) return '0';
+    // Preserve all full decimal places without scientific notation or loss of precision
+    const str = num.toLocaleString('en-US', {
+      minimumFractionDigits: 0,
+      maximumFractionDigits: 20,
+      useGrouping: false
+    });
+    return str;
+  };
+
   // Transaction Table Filters & Sorting States
   const [txSortField, setTxSortField] = useState<string>('date');
   const [txSortAsc, setTxSortAsc] = useState<boolean>(false); // default descending (newest first)
   const [txFilterBrokerId, setTxFilterBrokerId] = useState<string>('');
   const [txFilterPortfolioId, setTxFilterPortfolioId] = useState<string>('');
-  const [txFilterType, setTxFilterType] = useState<string>('');
-  const [txFilterTicker, setTxFilterTicker] = useState<string>('');
+  const [txFilterTypes, setTxFilterTypes] = useState<string[]>([]);
+  const [txFilterTickers, setTxFilterTickers] = useState<string[]>([]);
+  const [typeDropdownOpen, setTypeDropdownOpen] = useState<boolean>(false);
+  const [tickerDropdownOpen, setTickerDropdownOpen] = useState<boolean>(false);
+  const [tickerSearchQuery, setTickerSearchQuery] = useState<string>('');
+  const [columnDropdownOpen, setColumnDropdownOpen] = useState<boolean>(false);
+  const [txVisibleColumns, setTxVisibleColumns] = useState<string[]>(() => {
+    try {
+      const saved = localStorage.getItem('gainbusters_visible_cols');
+      return saved ? JSON.parse(saved) : ['date', 'portfolio', 'type', 'symbol', 'qty', 'price', 'total', 'currentValue', 'commission', 'notes'];
+    } catch (_) {
+      return ['date', 'portfolio', 'type', 'symbol', 'qty', 'price', 'total', 'currentValue', 'commission', 'notes'];
+    }
+  });
+
+  useEffect(() => {
+    localStorage.setItem('gainbusters_visible_cols', JSON.stringify(txVisibleColumns));
+  }, [txVisibleColumns]);
   const [txFilterDateStart, setTxFilterDateStart] = useState<string>('');
   const [txFilterDateEnd, setTxFilterDateEnd] = useState<string>('');
+  const [txHighlightIds, setTxHighlightIds] = useState<string[]>([]);
 
   // Sincronizzazione feedback alert state
   const [syncFeedback, setSyncFeedback] = useState<{ message: string; type: 'success' | 'error' | 'info' } | null>(null);
@@ -238,7 +376,7 @@ export default function App() {
   // Deletion confirmation state
   const [deleteConfirm, setDeleteConfirm] = useState<{
     open: boolean;
-    type: 'broker' | 'portfolio' | 'transaction' | 'cost';
+    type: 'broker' | 'portfolio' | 'transaction' | 'cost' | 'transfer';
     id: string;
     message: string;
   }>({
@@ -410,7 +548,7 @@ export default function App() {
   
   const currencySymbol = getCurrencySymbol(selectedCurrency);
   
-  const activeCurrencies: string[] = db.settings.activeCurrencies || ['EUR', 'USD', 'GBP', 'CHF', 'JPY'];
+  const activeCurrencies: string[] = db.settings.activeCurrencies || ['EUR', 'USD', 'GBP', 'CHF', 'JPY', 'BTC', 'ETH', 'SOL', 'USDT', 'USDC'];
 
   const getExchangeRate = (fromStr: string, toStr: string, dateStr: string): number => {
     const from = fromStr.toUpperCase();
@@ -421,34 +559,36 @@ export default function App() {
     const dStr = dateStr.includes('T') ? dateStr.split('T')[0] : dateStr;
 
     const lookupRate = (f: string, t: string): number | null => {
-      const symbolDirect = `${f}${t}=X`;
-      const symbolInverse = `${t}${f}=X`;
+      const pairsToCheck = [
+        { sym: `${f}${t}=X`, inverted: false },
+        { sym: `${t}${f}=X`, inverted: true },
+        { sym: `${f}-${t}`, inverted: false },
+        { sym: `${t}-${f}`, inverted: true },
+        { sym: `${f}/${t}`, inverted: false },
+        { sym: `${t}/${f}`, inverted: true },
+        { sym: `${f}${t}`, inverted: false },
+        { sym: `${t}${f}`, inverted: true },
+        { sym: f, inverted: false }, // direct crypto ticker e.g. BTC (denominated in EUR)
+        { sym: t, inverted: true },  // direct crypto ticker e.g. BTC (when converting EUR -> BTC)
+      ];
 
-      // 1. Direct lookup
-      if (db.priceCache[symbolDirect] && db.priceCache[symbolDirect][dStr] !== undefined) {
-        return db.priceCache[symbolDirect][dStr];
-      }
-      // 2. Inverse lookup
-      if (db.priceCache[symbolInverse] && db.priceCache[symbolInverse][dStr] !== undefined && db.priceCache[symbolInverse][dStr] > 0) {
-        return 1 / db.priceCache[symbolInverse][dStr];
-      }
-
-      // 3. Trailing historical fallback
-      if (db.priceCache[symbolDirect]) {
-        const dates = Object.keys(db.priceCache[symbolDirect]).sort();
-        if (dates.length > 0) {
-          const preceding = dates.filter(dt => dt <= dStr);
-          const targetDt = preceding.length > 0 ? preceding[preceding.length - 1] : dates[0];
-          return db.priceCache[symbolDirect][targetDt];
+      // 1. Direct lookup for date
+      for (const p of pairsToCheck) {
+        if (db.priceCache[p.sym] && db.priceCache[p.sym][dStr] !== undefined) {
+          const val = db.priceCache[p.sym][dStr];
+          if (val > 0) return p.inverted ? 1 / val : val;
         }
       }
-      if (db.priceCache[symbolInverse]) {
-        const dates = Object.keys(db.priceCache[symbolInverse]).sort();
-        if (dates.length > 0) {
-          const preceding = dates.filter(dt => dt <= dStr);
-          const targetDt = preceding.length > 0 ? preceding[preceding.length - 1] : dates[0];
-          if (db.priceCache[symbolInverse][targetDt] > 0) {
-            return 1 / db.priceCache[symbolInverse][targetDt];
+
+      // 2. Trailing historical fallback
+      for (const p of pairsToCheck) {
+        if (db.priceCache[p.sym]) {
+          const dates = Object.keys(db.priceCache[p.sym]).sort();
+          if (dates.length > 0) {
+            const preceding = dates.filter(dt => dt <= dStr);
+            const targetDt = preceding.length > 0 ? preceding[preceding.length - 1] : dates[dates.length - 1];
+            const val = db.priceCache[p.sym][targetDt];
+            if (val > 0) return p.inverted ? 1 / val : val;
           }
         }
       }
@@ -474,7 +614,12 @@ export default function App() {
       'CHFEUR': 1.04, 'EURCHF': 0.96,
       'JPYEUR': 0.0059, 'EURJPY': 169.5,
       'CADEUR': 0.67, 'EURCAD': 1.49,
-      'AUDEUR': 0.61, 'EURAUD': 1.64
+      'AUDEUR': 0.61, 'EURAUD': 1.64,
+      'BTCEUR': 85000, 'BTCUSD': 92000,
+      'ETHEUR': 2500, 'ETHUSD': 2700,
+      'SOLEUR': 160, 'SOLUSD': 175,
+      'USDTEUR': 0.92, 'USDCEUR': 0.92,
+      'EURBTC': 1 / 85000, 'EURETH': 1 / 2500, 'EURSOL': 1 / 160
     };
     const code = `${from}${to}`;
     if (fallbacks[code] !== undefined) return fallbacks[code];
@@ -905,46 +1050,6 @@ export default function App() {
   const otherCostsList = db.otherCosts || [];
   const activeOtherCosts = otherCostsList.filter(c => activePortIds.includes(c.portfolioId));
 
-  // Current owned share metrics
-  const tickerMetrics: {
-    [sym: string]: {
-      sharesOwned: number;
-      totalBuyCash: number;
-      totalBuyShareCount: number;
-      totalCommissionsPaid: number;
-      pmc: number;
-      avgCommissionShare: number;
-    }
-  } = {};
-
-  activeTxSorted.forEach((t) => {
-    const sym = t.symbol.toUpperCase();
-    if (!tickerMetrics[sym]) {
-      tickerMetrics[sym] = { sharesOwned: 0, totalBuyCash: 0, totalBuyShareCount: 0, totalCommissionsPaid: 0, pmc: 0, avgCommissionShare: 0 };
-    }
-    const met = tickerMetrics[sym];
-    if (t.type === TransactionType.BUY) {
-      met.sharesOwned += t.qty;
-      const cashInDisplay = convertValue(t.qty * t.price, t.currency || 'EUR', selectedCurrency, t.date);
-      const commInDisplay = convertValue(t.commission || 0, t.commissionCurrency || t.currency || 'EUR', selectedCurrency, t.date);
-      met.totalBuyCash += cashInDisplay;
-      met.totalBuyShareCount += t.qty;
-      met.totalCommissionsPaid += commInDisplay;
-    } else {
-      met.sharesOwned = Math.max(0, met.sharesOwned - t.qty);
-      // For average cost calculation, sells do not affect the original average purchase cost!
-    }
-  });
-
-  // Calculate final PMCs
-  Object.keys(tickerMetrics).forEach((sym) => {
-    const met = tickerMetrics[sym];
-    if (met.totalBuyShareCount > 0) {
-      met.pmc = met.totalBuyCash / met.totalBuyShareCount;
-      met.avgCommissionShare = met.totalCommissionsPaid / met.totalBuyShareCount;
-    }
-  });
-
   // ================= UTILITY FINANCE RESOLVERS =================
 
   const getPriceForDate = (sym: string, dString: string, pmcFallback: number): number => {
@@ -1001,49 +1106,40 @@ export default function App() {
     return 0.0;
   };
 
-  // Compute stats aggregates
-  let totalCapitalInvested = 0; // standard unadjusted capital out of pocket (current assets * PMC)
-  let totalCapsWithCommissions = 0; // current assets * (PMC + commission per share)
-  let totalNominalValue = 0; // current active shares valued at today's price in cache
-  let yesterdayNominalValue = 0; // valued at yesterday's price to calculate daily variance
-
   const todayStr = new Date().toISOString().split('T')[0];
   const yesterdayObj = new Date();
   yesterdayObj.setDate(yesterdayObj.getDate() - 1);
   const yesterdayStr = yesterdayObj.toISOString().split('T')[0];
 
-  Object.keys(tickerMetrics).forEach((sym) => {
-    const met = tickerMetrics[sym];
-    if (met.sharesOwned <= 0) return;
+  // CENTRALIZED ATOMIC FINANCIAL CALCULATION
+  const financialMetrics = calculateFinancialMetrics(
+    db.transactions,
+    activePortIds,
+    otherCostsList,
+    includeCommissions,
+    selectedCurrency,
+    convertValue,
+    getPriceForDate,
+    getTickerCurrency,
+    todayStr,
+    yesterdayStr,
+    tickerFilterSymbol
+  );
 
-    const tickerCurrency = getTickerCurrency(sym);
-    // met.pmc is already in selectedCurrency because totalBuyCash was converted to selectedCurrency on transactions dates
-    const todayPrice = getPriceForDate(sym, todayStr, convertValue(met.pmc, selectedCurrency, tickerCurrency, todayStr));
-    const yesterdayPrice = getPriceForDate(sym, yesterdayStr, todayPrice);
-
-    const baseCost = met.sharesOwned * met.pmc;
-    const commCost = baseCost + (met.sharesOwned * met.avgCommissionShare);
-
-    totalCapitalInvested += baseCost;
-    totalCapsWithCommissions += commCost;
-
-    const todayPriceInDisplay = convertValue(todayPrice, tickerCurrency, selectedCurrency, todayStr);
-    const yesterdayPriceInDisplay = convertValue(yesterdayPrice, tickerCurrency, selectedCurrency, yesterdayStr);
-
-    totalNominalValue += (met.sharesOwned * todayPriceInDisplay);
-    yesterdayNominalValue += (met.sharesOwned * yesterdayPriceInDisplay);
-  });
-
-  const totalCommissionsPaid = activeTxSorted.reduce((sum, tx) => sum + convertValue(tx.commission || 0, tx.commissionCurrency || tx.currency || 'EUR', selectedCurrency, tx.date), 0);
-  const totalOtherCostsPaid = activeOtherCosts.reduce((sum, c) => sum + convertValue(c.amount || 0, c.currency || 'EUR', selectedCurrency, c.date), 0);
-  const currentValAdjusted = totalNominalValue - (includeCommissions ? (totalCommissionsPaid + totalOtherCostsPaid) : 0);
-
-  const costBasis = includeCommissions ? (totalCapsWithCommissions + totalOtherCostsPaid) : totalCapitalInvested;
-  const absoluteGain = currentValAdjusted - totalCapitalInvested; // Net gain: Current Adjusted - Truly Invested
-  const percentageReturn = totalCapitalInvested > 0 ? (absoluteGain / totalCapitalInvested) * 100 : 0;
-
-  const dailyChangeAbsolute = totalNominalValue - yesterdayNominalValue;
-  const dailyGainPercentage = yesterdayNominalValue > 0 ? (dailyChangeAbsolute / yesterdayNominalValue) * 100 : 0;
+  const {
+    tickerMetrics,
+    totalCapitalInvested,
+    totalNominalValue,
+    yesterdayNominalValue,
+    totalCommissionsPaid,
+    totalOtherCostsPaid,
+    costBasis,
+    currentValAdjusted,
+    absoluteGain,
+    percentageReturn,
+    dailyChangeAbsolute,
+    dailyGainPercentage
+  } = financialMetrics;
 
   // MONEY WEIGHTED RETURN SOLVER (MWRR - IRR)
   const calculateMWRR = (): number => {
@@ -1059,7 +1155,8 @@ export default function App() {
       const priceInDisplay = convertValue(tx.price, tx.currency || 'EUR', selectedCurrency, tx.date);
       const commInDisplay = convertValue(tx.commission || 0, tx.commissionCurrency || tx.currency || 'EUR', selectedCurrency, tx.date);
 
-      const cfAmount = tx.type === TransactionType.BUY
+      const isIncoming = tx.type === TransactionType.BUY || tx.type === TransactionType.TRANSFER_IN;
+      const cfAmount = isIncoming
         ? -(tx.qty * priceInDisplay + (includeCommissions ? commInDisplay : 0))
         : (tx.qty * priceInDisplay - (includeCommissions ? commInDisplay : 0));
 
@@ -1132,14 +1229,6 @@ export default function App() {
       temp.setUTCDate(temp.getUTCDate() + 1);
     }
 
-    // Historical tracking parameters
-    const ongoingHoldings: { [sym: string]: number } = {};
-    const ongoingCommissionsPaid: { [sym: string]: number } = {};
-    
-    // Track PMC dynamically
-    const ongoingBuyCashSpent: { [sym: string]: number } = {};
-    const ongoingBuyShareWeights: { [sym: string]: number } = {};
-
     let runningInflationMultiplier = 1.0;
     let prevYear: number | null = null;
     let prevMonth: number | null = null;
@@ -1147,15 +1236,10 @@ export default function App() {
     let cumulativeOtherCosts = 0;
 
     let prevDateString: string | null = null;
-    const benchOngoingHoldings: { [sym: string]: number } = {};
     let benchNAV = 100;
 
     const targetId = activeBenchmark;
-    const benchTxSorted = (activeBenchmark !== 'NONE' && activeBenchmark !== 'TICKER')
-      ? db.transactions
-          .filter(t => t.portfolioId === targetId || t.portfolioId === 'p-' + targetId)
-          .sort((a, b) => new Date(a.date).getTime() - new Date(b.date).getTime())
-      : [];
+    const isBenchPortfolio = activeBenchmark !== 'NONE' && activeBenchmark !== 'TICKER';
 
     dates.forEach((dateString) => {
       // 1. Accumulate chronological inflation step-by-step (past to present)
@@ -1164,7 +1248,6 @@ export default function App() {
       const curMonth = tDate.getUTCMonth() + 1;
 
       if (prevYear !== null && prevMonth !== null && (curYear !== prevYear || curMonth !== prevMonth)) {
-        // We just transitioned to a new month. Apply the completed month's inflation rate chronological forward!
         const activeInf = db.settings.inflationIndices.find(idx => idx?.id === db.settings.selectedInflationId);
         const rate = getMonthlyInflationRate(activeInf, prevYear, prevMonth);
         runningInflationMultiplier *= (1 + rate);
@@ -1173,60 +1256,38 @@ export default function App() {
       prevYear = curYear;
       prevMonth = curMonth;
 
-      // Aggregate transactions on this day
-      const txsOnDay = activeTxSorted.filter(t => t.date.split('T')[0] === dateString);
-      
-      txsOnDay.forEach((tx) => {
-        const sym = tx.symbol.toUpperCase();
-        if (!ongoingHoldings[sym]) {
-          ongoingHoldings[sym] = 0;
-          ongoingCommissionsPaid[sym] = 0;
-          ongoingBuyCashSpent[sym] = 0;
-          ongoingBuyShareWeights[sym] = 0;
-        }
-
-        const commInDisplay = convertValue(tx.commission || 0, tx.commissionCurrency || tx.currency || 'EUR', selectedCurrency, dateString);
-
-        if (tx.type === TransactionType.BUY) {
-          ongoingHoldings[sym] += tx.qty;
-          ongoingCommissionsPaid[sym] += commInDisplay;
-          const cashInDisplay = convertValue(tx.qty * tx.price, tx.currency || 'EUR', selectedCurrency, dateString);
-          ongoingBuyCashSpent[sym] += cashInDisplay;
-          ongoingBuyShareWeights[sym] += tx.qty;
-        } else {
-          ongoingHoldings[sym] = Math.max(0, ongoingHoldings[sym] - tx.qty);
-        }
-        cumulativeCommissions += commInDisplay;
-      });
+      // Calculate exact holdings on this day using our centralized lot calculator
+      const { tickerHoldings: dayHoldings } = calculateHoldingsAndLots(
+        db.transactions,
+        activePortIds,
+        convertValue,
+        selectedCurrency,
+        tickerFilterSymbol,
+        dateString
+      );
 
       // Valuate holdings on this day
       let dayNominalBasis = 0;
-      let dayCapsWithComms = 0;
       let dayValue = 0;
 
-      Object.keys(ongoingHoldings).forEach((sym) => {
-        const qty = ongoingHoldings[sym];
-        if (qty <= 0) return;
+      Object.keys(dayHoldings).forEach((sym) => {
+        const h = dayHoldings[sym];
+        if (h.sharesOwned <= 0) return;
+
+        dayNominalBasis += h.totalCapitalInvested;
 
         const tickerCurrency = getTickerCurrency(sym);
-
-        const currentPMC = ongoingBuyShareWeights[sym] > 0 
-          ? ongoingBuyCashSpent[sym] / ongoingBuyShareWeights[sym] 
-          : 0;
-        const currentAvgComm = ongoingBuyShareWeights[sym] > 0
-          ? ongoingCommissionsPaid[sym] / ongoingBuyShareWeights[sym]
-          : 0;
-
-        const basePMCValue = qty * currentPMC;
-        const baseCommValue = basePMCValue + (qty * currentAvgComm);
-
-        dayNominalBasis += basePMCValue;
-        dayCapsWithComms += baseCommValue;
-
-        const currentPMCNative = convertValue(currentPMC, selectedCurrency, tickerCurrency, dateString);
-        const dailyPrice = getPriceForDate(sym, dateString, currentPMCNative);
+        const fallbackPriceNative = convertValue(h.pmc, selectedCurrency, tickerCurrency, dateString);
+        const dailyPrice = getPriceForDate(sym, dateString, fallbackPriceNative > 0 ? fallbackPriceNative : 100);
         const dailyPriceInDisplay = convertValue(dailyPrice, tickerCurrency, selectedCurrency, dateString);
-        dayValue += (qty * dailyPriceInDisplay);
+        dayValue += (h.sharesOwned * dailyPriceInDisplay);
+      });
+
+      // Accumulate transactions commissions on this day
+      const txsOnDay = activeTxSorted.filter(t => t.date.split('T')[0] === dateString);
+      txsOnDay.forEach((tx) => {
+        const commInDisplay = convertValue(tx.commission || 0, tx.commissionCurrency || tx.currency || 'EUR', selectedCurrency, dateString);
+        cumulativeCommissions += commInDisplay;
       });
 
       // Accumulate other costs (taxes, fees, bolli) on this day chronologically
@@ -1236,19 +1297,28 @@ export default function App() {
         cumulativeOtherCosts += costInDisplay;
       });
 
-      // Adjust currentValue and realValueBased based on active includeCommissions setting!
+      // Adjust currentValue and realValueBased based on active includeCommissions setting
       const finalDayValue = dayValue - (includeCommissions ? (cumulativeCommissions + cumulativeOtherCosts) : 0);
       const realValInflatedDiscount = finalDayValue / runningInflationMultiplier;
 
-      // Calculate daily return R_t of the benchmark portfolio based on asset returns from yesterday to today
-      let benchReturn = 0;
-      if (activeBenchmark !== 'NONE' && activeBenchmark !== 'TICKER' && prevDateString) {
+      // Benchmark NAV tracking
+      let benchClosingNormalized = undefined;
+      if (isBenchPortfolio && prevDateString) {
+        const { tickerHoldings: prevBenchHoldings } = calculateHoldingsAndLots(
+          db.transactions,
+          [targetId, 'p-' + targetId],
+          convertValue,
+          selectedCurrency,
+          null,
+          prevDateString
+        );
+
         let prevHoldingsValuedAtToday = 0;
         let prevHoldingsValuedAtYesterday = 0;
 
-        Object.keys(benchOngoingHoldings).forEach((sym) => {
-          const qty = benchOngoingHoldings[sym];
-          if (qty <= 0) return;
+        Object.keys(prevBenchHoldings).forEach((sym) => {
+          const bh = prevBenchHoldings[sym];
+          if (bh.sharesOwned <= 0) return;
 
           const tickerCurrency = getTickerCurrency(sym);
           const priceToday = getPriceForDate(sym, dateString, 100);
@@ -1257,40 +1327,19 @@ export default function App() {
           const priceYesterday = getPriceForDate(sym, prevDateString!, 100);
           const priceYesterdayInDisplay = convertValue(priceYesterday, tickerCurrency, selectedCurrency, prevDateString!);
 
-          prevHoldingsValuedAtToday += qty * priceTodayInDisplay;
-          prevHoldingsValuedAtYesterday += qty * priceYesterdayInDisplay;
+          prevHoldingsValuedAtToday += bh.sharesOwned * priceTodayInDisplay;
+          prevHoldingsValuedAtYesterday += bh.sharesOwned * priceYesterdayInDisplay;
         });
 
         if (prevHoldingsValuedAtYesterday > 0) {
-          benchReturn = (prevHoldingsValuedAtToday - prevHoldingsValuedAtYesterday) / prevHoldingsValuedAtYesterday;
+          const benchReturn = (prevHoldingsValuedAtToday - prevHoldingsValuedAtYesterday) / prevHoldingsValuedAtYesterday;
+          benchNAV = benchNAV * (1 + benchReturn);
         }
-        
-        benchNAV = benchNAV * (1 + benchReturn);
-      }
-
-      // Now update benchmark holdings with today's transactions
-      if (activeBenchmark !== 'NONE' && activeBenchmark !== 'TICKER') {
-        const benchTxsOnDay = benchTxSorted.filter(t => t.date.split('T')[0] === dateString);
-        benchTxsOnDay.forEach((tx) => {
-          const sym = tx.symbol.toUpperCase();
-          if (!benchOngoingHoldings[sym]) {
-            benchOngoingHoldings[sym] = 0;
-          }
-          if (tx.type === TransactionType.BUY) {
-            benchOngoingHoldings[sym] += tx.qty;
-          } else {
-            benchOngoingHoldings[sym] = Math.max(0, benchOngoingHoldings[sym] - tx.qty);
-          }
-        });
-      }
-
-      let benchClosingNormalized = undefined;
-      if (activeBenchmark === 'TICKER' && benchmarkSymbol) {
+        benchClosingNormalized = benchNAV;
+      } else if (activeBenchmark === 'TICKER' && benchmarkSymbol) {
         const rawBenchPrice = getPriceForDate(benchmarkSymbol, dateString, 100);
         const benchCurr = benchmarkSymbol.toUpperCase().endsWith('.MI') ? 'EUR' : 'USD';
         benchClosingNormalized = convertValue(rawBenchPrice, benchCurr, selectedCurrency, dateString);
-      } else if (activeBenchmark !== 'NONE') {
-        benchClosingNormalized = benchNAV;
       }
 
       prevDateString = dateString;
@@ -1298,7 +1347,7 @@ export default function App() {
       timeline.push({
         date: dateString,
         investedNominal: dayNominalBasis,
-        investedWithCommissions: dayCapsWithComms + (includeCommissions ? cumulativeOtherCosts : 0),
+        investedWithCommissions: dayNominalBasis + (includeCommissions ? (cumulativeCommissions + cumulativeOtherCosts) : 0),
         currentValue: finalDayValue,
         realValueAdjusted: realValInflatedDiscount,
         benchmarkValue: benchClosingNormalized
@@ -1359,6 +1408,21 @@ export default function App() {
   };
 
   const { volatility, maxDrawdown } = computeVolatilityAndDrawdownStats();
+
+  const overallPortfolioPerformance = useMemo(() => {
+    return calculatePortfolioPerformance(
+      dailyBalances,
+      db.transactions,
+      activePortIds,
+      activeOtherCosts,
+      includeCommissions,
+      selectedCurrency,
+      convertValue,
+      undefined,
+      undefined,
+      tickerFilterSymbol
+    );
+  }, [dailyBalances, db.transactions, activePortIds, activeOtherCosts, includeCommissions, selectedCurrency, convertValue, tickerFilterSymbol]);
 
   // Allocation matrix
   const getAssetAllocationMatrix = () => {
@@ -1470,6 +1534,11 @@ export default function App() {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ transactions: newDb.transactions })
+        });
+        await fetch('/api/db/transfers', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ transfers: newDb.transfers || [] })
         });
         await fetch('/api/db/otherCosts', {
           method: 'POST',
@@ -1594,13 +1663,13 @@ export default function App() {
     }
 
     // Filter by Type
-    if (txFilterType) {
-      list = list.filter(tx => tx.type === txFilterType);
+    if (txFilterTypes.length > 0) {
+      list = list.filter(tx => txFilterTypes.includes(tx.type));
     }
 
     // Filter by Ticker
-    if (txFilterTicker) {
-      list = list.filter(tx => tx.symbol.toUpperCase().includes(txFilterTicker.toUpperCase().trim()));
+    if (txFilterTickers.length > 0) {
+      list = list.filter(tx => txFilterTickers.includes(tx.symbol.toUpperCase()));
     }
 
     // Filter by Start Date
@@ -1705,9 +1774,386 @@ export default function App() {
   };
 
   const deleteTransactionMutation = (id: string) => {
-    const freshTx = db.transactions.filter(t => t.id !== id);
-    const updated = { ...db, transactions: freshTx };
+    const txToDelete = db.transactions.find(t => t.id === id);
+    let idsToDelete = [id];
+    let transferIdsToDelete: string[] = [];
+
+    if (txToDelete) {
+      if (txToDelete.transferId) {
+        transferIdsToDelete.push(txToDelete.transferId);
+        db.transactions.forEach(t => {
+          if (t.transferId === txToDelete.transferId) {
+            idsToDelete.push(t.id);
+          }
+        });
+      }
+      if (txToDelete.transferInTransactionId) idsToDelete.push(txToDelete.transferInTransactionId);
+      if (txToDelete.transferOutTransactionId) idsToDelete.push(txToDelete.transferOutTransactionId);
+    }
+
+    const freshTx = db.transactions.filter(t => !idsToDelete.includes(t.id));
+    const freshTransfers = (db.transfers || []).filter(tr =>
+      !transferIdsToDelete.includes(tr.id) &&
+      !idsToDelete.includes(tr.id) &&
+      !idsToDelete.includes(tr.transferOutTransactionId || '') &&
+      !idsToDelete.includes(tr.transferInTransactionId || '')
+    );
+    const updated = { ...db, transactions: freshTx, transfers: freshTransfers };
     saveDatabaseState(updated);
+  };
+
+  const deleteTransferMutation = (transferId: string) => {
+    const transfer = (db.transfers || []).find(t => t.id === transferId);
+    let txOutId = transfer?.transferOutTransactionId;
+    let txInId = transfer?.transferInTransactionId;
+
+    if (!transfer) {
+      const tx = db.transactions.find(t => t.id === transferId);
+      if (tx) {
+        if (tx.type === TransactionType.TRANSFER_OUT) {
+          txOutId = tx.id;
+          txInId = tx.transferInTransactionId;
+        } else if (tx.type === TransactionType.TRANSFER_IN) {
+          txInId = tx.id;
+          txOutId = tx.transferOutTransactionId;
+        }
+      }
+    }
+
+    const freshTransfers = (db.transfers || []).filter(t => t.id !== transferId && (txOutId ? t.transferOutTransactionId !== txOutId : true));
+    const freshTx = db.transactions.filter(t =>
+      (txOutId ? t.id !== txOutId : true) &&
+      (txInId ? t.id !== txInId : true) &&
+      t.transferId !== transferId
+    );
+    const updated = { ...db, transactions: freshTx, transfers: freshTransfers };
+    saveDatabaseState(updated);
+  };
+
+  const getAvailableLots = (symbol: string, portfolioId: string, excludeTransferId?: string | null) => {
+    const validTx = excludeTransferId
+      ? db.transactions.filter(t => t.transferId !== excludeTransferId && t.id !== excludeTransferId)
+      : db.transactions;
+
+    // 1. Get all incoming transactions
+    const incoming = validTx
+      .filter(tx => tx.portfolioId === portfolioId && tx.symbol.toUpperCase() === symbol.toUpperCase() && (tx.type === TransactionType.BUY || tx.type === TransactionType.TRANSFER_IN))
+      .sort((a, b) => new Date(a.date).getTime() - new Date(b.date).getTime())
+      .map(tx => ({
+        id: tx.id,
+        date: tx.date,
+        price: tx.type === TransactionType.TRANSFER_IN ? (tx.originalBuyPrice ?? tx.price) : tx.price,
+        originalBuyDate: tx.type === TransactionType.TRANSFER_IN ? (tx.originalBuyDate ?? tx.date) : tx.date,
+        qty: tx.qty,
+        availableQty: tx.qty,
+        currency: tx.currency
+      }));
+
+    // 2. Get all outgoing transactions
+    const outgoing = validTx
+      .filter(tx => tx.portfolioId === portfolioId && tx.symbol.toUpperCase() === symbol.toUpperCase() && (tx.type === TransactionType.SELL || tx.type === TransactionType.TRANSFER_OUT))
+      .sort((a, b) => new Date(a.date).getTime() - new Date(b.date).getTime());
+
+    // 3. Deplete incoming lots using outgoing flows (FIFO standard depletion)
+    outgoing.forEach(out => {
+      let outQty = out.qty;
+      for (let i = 0; i < incoming.length; i++) {
+        if (outQty <= 0) break;
+        const lot = incoming[i];
+        if (lot.availableQty > 0) {
+          const drain = Math.min(lot.availableQty, outQty);
+          lot.availableQty -= drain;
+          outQty -= drain;
+        }
+      }
+    });
+
+    // 4. Return lots with available qty > 1e-8
+    return incoming.filter(lot => lot.availableQty > 1e-8);
+  };
+
+  const getAvailableTickersForSource = (srcPortId: string): string[] => {
+    if (!srcPortId) return [];
+    const allSymbols = Array.from(new Set(db.transactions.map(tx => tx.symbol.toUpperCase()))) as string[];
+    return allSymbols.filter(sym => {
+      const lots = getAvailableLots(sym, srcPortId);
+      const total = lots.reduce((s, l) => s + l.availableQty, 0);
+      return total > 0;
+    });
+  };
+
+  const getTypeBadgeClass = (type: TransactionType) => {
+    switch (type) {
+      case TransactionType.BUY:
+        return 'bg-emerald-500/10 text-emerald-400 border border-emerald-500/20';
+      case TransactionType.SELL:
+        return 'bg-rose-500/10 text-rose-400 border border-rose-500/20';
+      case TransactionType.TRANSFER_IN:
+        return 'bg-amber-500/10 text-amber-400 border border-amber-500/20';
+      case TransactionType.TRANSFER_OUT:
+        return 'bg-amber-500/10 text-amber-400 border border-amber-500/20';
+      default:
+        return 'bg-slate-500/10 text-slate-400 border border-slate-500/20';
+    }
+  };
+
+  const getTypeLabel = (type: TransactionType) => {
+    switch (type) {
+      case TransactionType.BUY:
+        return t.buyBtn || 'BUY';
+      case TransactionType.SELL:
+        return t.sellBtn || 'SELL';
+      case TransactionType.TRANSFER_IN:
+        return t.transferInBadge || 'TRANSFER IN';
+      case TransactionType.TRANSFER_OUT:
+        return t.transferOutBadge || 'TRANSFER OUT';
+      default:
+        return type;
+    }
+  };
+
+  const saveTransferMutation = () => {
+    setFormErr('');
+    const {
+      editTransferId,
+      sourcePortfolioId,
+      destPortfolioId,
+      symbol,
+      qty,
+      date,
+      criteria,
+      price,
+      priceCurrency,
+      sourceCommission,
+      sourceCommissionCurrency,
+      destCommission,
+      destCommissionCurrency,
+      notes
+    } = transferForm;
+
+    const parsedQty = Number(qty);
+    const parsedPrice = price !== '' && price !== undefined ? Number(price) : 0;
+    const parsedSourceCommission = sourceCommission !== '' && sourceCommission !== undefined ? Number(sourceCommission) : 0;
+    const parsedDestCommission = destCommission !== '' && destCommission !== undefined ? Number(destCommission) : 0;
+
+    if (!sourcePortfolioId || !destPortfolioId || !symbol.trim() || parsedQty <= 0 || !date) {
+      setFormErr(t.validationErrorAllFieldsRequired || 'Tutti i campi obbligatori devono essere compilati.');
+      return;
+    }
+
+    if (sourcePortfolioId === destPortfolioId) {
+      setFormErr(t.samePortfolioError || 'I portafogli di origine e destinazione devono essere diversi.');
+      return;
+    }
+
+    const sourcePort = db.portfolios.find(p => p.id === sourcePortfolioId);
+    const destPort = db.portfolios.find(p => p.id === destPortfolioId);
+    const sourceAcc = sourcePort ? db.accounts.find(a => a.id === sourcePort.accountId) : null;
+    const destAcc = destPort ? db.accounts.find(a => a.id === destPort.accountId) : null;
+    const sourceCurr = sourceAcc?.currency || db.settings.defaultCurrency || 'EUR';
+    const destCurr = destAcc?.currency || db.settings.defaultCurrency || 'EUR';
+
+    // Check available lots in source portfolio (excluding current transfer lots if editing)
+    const availableLots = getAvailableLots(symbol, sourcePortfolioId, editTransferId);
+    const totalAvailable = availableLots.reduce((sum, lot) => sum + lot.availableQty, 0);
+
+    if (parsedQty > totalAvailable + 1e-7) {
+      setFormErr(t.insufficientQtyError || 'Quantità richiesta superiore alle quote disponibili.');
+      return;
+    }
+
+    // Sort lots according to chosen criteria (FIFO or LIFO)
+    const sortedLots = [...availableLots].sort((a, b) => {
+      const timeA = new Date(a.date).getTime();
+      const timeB = new Date(b.date).getTime();
+      return criteria === 'FIFO' ? timeA - timeB : timeB - timeA;
+    });
+
+    const transferId = editTransferId || ('tr-' + Math.random().toString(36).substring(2, 9));
+    let remainingToTransfer = parsedQty;
+    const newTransactions: Transaction[] = [];
+
+    for (let i = 0; i < sortedLots.length; i++) {
+      if (remainingToTransfer <= 0) break;
+      const lot = sortedLots[i];
+      const qtyToTake = Math.min(lot.availableQty, remainingToTransfer);
+      remainingToTransfer -= qtyToTake;
+
+      const txOutId = 'tx-' + Math.random().toString(36).substring(2, 9);
+      const txInId = 'tx-' + Math.random().toString(36).substring(2, 9);
+
+      const isFirst = newTransactions.length === 0;
+      const chunkSourceComm = isFirst ? parsedSourceCommission : 0;
+      const chunkDestComm = isFirst ? parsedDestCommission : 0;
+
+      const txOut: Transaction = {
+        id: txOutId,
+        transferId: transferId,
+        portfolioId: sourcePortfolioId,
+        date: date || new Date().toISOString(),
+        type: TransactionType.TRANSFER_OUT,
+        symbol: symbol.toUpperCase().trim(),
+        qty: qtyToTake,
+        price: Number(parsedPrice > 0 ? parsedPrice : lot.price),
+        commission: chunkSourceComm,
+        currency: priceCurrency || lot.currency || sourceCurr,
+        commissionCurrency: sourceCommissionCurrency || sourceCurr,
+        notes: notes || '',
+        parentTransactionId: lot.id,
+        transferInTransactionId: txInId,
+        originalBuyPrice: lot.price,
+        originalBuyDate: lot.originalBuyDate,
+        transferCriteria: criteria
+      };
+
+      const txIn: Transaction = {
+        id: txInId,
+        transferId: transferId,
+        portfolioId: destPortfolioId,
+        date: date || new Date().toISOString(),
+        type: TransactionType.TRANSFER_IN,
+        symbol: symbol.toUpperCase().trim(),
+        qty: qtyToTake,
+        price: Number(parsedPrice > 0 ? parsedPrice : lot.price),
+        commission: chunkDestComm,
+        currency: priceCurrency || lot.currency || destCurr,
+        commissionCurrency: destCommissionCurrency || destCurr,
+        notes: notes || '',
+        parentTransactionId: lot.id,
+        transferOutTransactionId: txOutId,
+        originalBuyPrice: lot.price,
+        originalBuyDate: lot.originalBuyDate,
+        transferCriteria: criteria
+      };
+
+      newTransactions.push(txOut, txIn);
+    }
+
+    // EXACTLY 1 Transfer entity created / updated for this operation
+    const singleTransfer: Transfer = {
+      id: transferId,
+      date: date || new Date().toISOString(),
+      symbol: symbol.toUpperCase().trim(),
+      qty: parsedQty,
+      price: parsedPrice > 0 ? parsedPrice : undefined,
+      priceCurrency: priceCurrency || sourceCurr,
+      sourcePortfolioId,
+      destPortfolioId,
+      sourceCommission: parsedSourceCommission,
+      sourceCommissionCurrency: sourceCommissionCurrency || sourceCurr,
+      destCommission: parsedDestCommission,
+      destCommissionCurrency: destCommissionCurrency || destCurr,
+      criteria,
+      notes: notes || '',
+      childTransactionIds: newTransactions.map(t => t.id)
+    };
+
+    // Filter out old child transactions if editing
+    const baseTxList = editTransferId
+      ? db.transactions.filter(t => t.transferId !== editTransferId && t.id !== editTransferId)
+      : db.transactions;
+    const updatedTxList = [...baseTxList, ...newTransactions];
+
+    // Update transfers array: exactly 1 Transfer record for this operation
+    const baseTransferList = editTransferId
+      ? (db.transfers || []).filter(tr => tr.id !== editTransferId)
+      : (db.transfers || []);
+    const updatedTransferList = [...baseTransferList, singleTransfer];
+
+    const updated: DBState = { ...db, transactions: updatedTxList, transfers: updatedTransferList };
+    saveDatabaseState(updated);
+
+    // Reset Form
+    setTransferForm({
+      open: false,
+      editTransferId: null,
+      sourcePortfolioId: '',
+      destPortfolioId: '',
+      symbol: '',
+      qty: '',
+      price: '',
+      priceCurrency: 'EUR',
+      sourceCommission: '',
+      sourceCommissionCurrency: 'EUR',
+      destCommission: '',
+      destCommissionCurrency: 'EUR',
+      date: new Date().toISOString().substring(0, 16),
+      criteria: 'FIFO',
+      notes: ''
+    });
+
+    triggerPriceSync(updated);
+  };
+
+  const getTransferPeerInfo = (tx: Transaction) => {
+    if (tx.type === TransactionType.TRANSFER_OUT && tx.transferInTransactionId) {
+      const peer = db.transactions.find(t => t.id === tx.transferInTransactionId);
+      const peerPort = peer ? db.portfolios.find(p => p.id === peer.portfolioId) : null;
+      return peerPort ? `→ ${peerPort.name}` : '';
+    }
+    if (tx.type === TransactionType.TRANSFER_IN && tx.transferOutTransactionId) {
+      const peer = db.transactions.find(t => t.id === tx.transferOutTransactionId);
+      const peerPort = peer ? db.portfolios.find(p => p.id === peer.portfolioId) : null;
+      return peerPort ? `← ${peerPort.name}` : '';
+    }
+    return null;
+  };
+
+  const getLotStatus = (tx: Transaction) => {
+    if (tx.type !== TransactionType.BUY && tx.type !== TransactionType.TRANSFER_IN) return null;
+    const outgoingMatches = db.transactions.filter(out => out.parentTransactionId === tx.id && out.type === TransactionType.TRANSFER_OUT);
+    const totalDepleted = outgoingMatches.reduce((sum, out) => sum + out.qty, 0);
+
+    if (totalDepleted <= 0) return { status: 'OPEN', depleted: 0, remaining: tx.qty };
+    if (totalDepleted >= tx.qty - 1e-7) return { status: 'FULLY_TRANSFERRED', depleted: totalDepleted, remaining: 0 };
+    return { status: 'PARTIALLY_TRANSFERRED', depleted: totalDepleted, remaining: tx.qty - totalDepleted };
+  };
+
+  const getTransferRecords = (): TransferRecord[] => {
+    const records: TransferRecord[] = [];
+
+    // STRICTLY iterate over db.transfers: exactly one row per Transfer entity created by user
+    (db.transfers || []).forEach((tr) => {
+      const srcPort = db.portfolios.find(p => p.id === tr.sourcePortfolioId);
+      const srcBroker = srcPort ? db.accounts.find(a => a.id === srcPort.accountId) : null;
+
+      const dstPort = db.portfolios.find(p => p.id === tr.destPortfolioId);
+      const dstBroker = dstPort ? db.accounts.find(a => a.id === dstPort.accountId) : null;
+
+      // Find child transactions for this transfer entity
+      const childOutTx = db.transactions.filter(t => t.transferId === tr.id && t.type === TransactionType.TRANSFER_OUT);
+      const childInTx = db.transactions.filter(t => t.transferId === tr.id && t.type === TransactionType.TRANSFER_IN);
+      const childCount = childOutTx.length > 0 ? childOutTx.length : (tr.childTransactionIds ? Math.floor(tr.childTransactionIds.length / 2) : 1);
+
+      records.push({
+        id: tr.id,
+        date: tr.date,
+        symbol: tr.symbol,
+        qty: tr.qty,
+        price: tr.price,
+        priceCurrency: tr.priceCurrency || db.settings.defaultCurrency || 'EUR',
+        sourcePortfolioId: tr.sourcePortfolioId,
+        sourcePortfolioName: srcPort?.name || '---',
+        sourceBrokerName: srcBroker?.name || '',
+        destPortfolioId: tr.destPortfolioId,
+        destPortfolioName: dstPort?.name || '---',
+        destBrokerName: dstBroker?.name || '',
+        sourceCommission: tr.sourceCommission || 0,
+        sourceCommissionCurrency: tr.sourceCommissionCurrency || tr.priceCurrency || 'EUR',
+        destCommission: tr.destCommission || 0,
+        destCommissionCurrency: tr.destCommissionCurrency || tr.priceCurrency || 'EUR',
+        criteria: tr.criteria || 'FIFO',
+        notes: tr.notes || '',
+        childCount: childCount > 0 ? childCount : 1,
+        childLotsSummary: childOutTx.length > 1
+          ? childOutTx.map(c => `${formatFullQuantity(c.qty)} (acq. ${formatDateString(c.originalBuyDate || c.date, lang)})`).join(', ')
+          : undefined,
+        txOutId: childOutTx[0]?.id || tr.transferOutTransactionId || '',
+        txInId: childInTx[0]?.id || tr.transferInTransactionId || ''
+      });
+    });
+
+    return records.sort((a, b) => new Date(b.date).getTime() - new Date(a.date).getTime());
   };
 
   // Other Costs CRUD
@@ -1783,12 +2229,229 @@ export default function App() {
     });
   };
 
-  const requestDeleteTransaction = (id: string) => {
+  const handleEditClick = (tx: Transaction) => {
+    if (tx.type === TransactionType.TRANSFER_IN || tx.type === TransactionType.TRANSFER_OUT) {
+      const parentTransfer = (db.transfers || []).find(tr => tr.id === tx.transferId);
+      if (parentTransfer) {
+        setTransferForm({
+          open: true,
+          editTransferId: parentTransfer.id,
+          sourcePortfolioId: parentTransfer.sourcePortfolioId,
+          destPortfolioId: parentTransfer.destPortfolioId,
+          symbol: parentTransfer.symbol,
+          qty: parentTransfer.qty.toString(),
+          price: parentTransfer.price ? parentTransfer.price.toString() : '',
+          priceCurrency: parentTransfer.priceCurrency || 'EUR',
+          sourceCommission: parentTransfer.sourceCommission ? parentTransfer.sourceCommission.toString() : '',
+          sourceCommissionCurrency: parentTransfer.sourceCommissionCurrency || 'EUR',
+          destCommission: parentTransfer.destCommission ? parentTransfer.destCommission.toString() : '',
+          destCommissionCurrency: parentTransfer.destCommissionCurrency || 'EUR',
+          date: parentTransfer.date.substring(0, 16),
+          criteria: parentTransfer.criteria || 'FIFO',
+          notes: parentTransfer.notes || ''
+        });
+        setFormErr('');
+        return;
+      }
+
+      let txOut = tx;
+      let txIn = tx;
+      if (tx.type === TransactionType.TRANSFER_OUT) {
+        const peer = db.transactions.find(t => t.id === tx.transferInTransactionId);
+        if (peer) txIn = peer;
+      } else {
+        const peer = db.transactions.find(t => t.id === tx.transferOutTransactionId);
+        if (peer) txOut = peer;
+      }
+
+      const sourcePort = db.portfolios.find(p => p.id === txOut.portfolioId);
+      const sourceAcc = sourcePort ? db.accounts.find(a => a.id === sourcePort.accountId) : null;
+      const destPort = db.portfolios.find(p => p.id === txIn.portfolioId);
+      const destAcc = destPort ? db.accounts.find(a => a.id === destPort.accountId) : null;
+
+      setTransferForm({
+        open: true,
+        editTransferId: txOut.transferId || txOut.id,
+        sourcePortfolioId: txOut.portfolioId,
+        destPortfolioId: txIn.portfolioId,
+        symbol: txOut.symbol,
+        qty: txOut.qty.toString(),
+        price: txOut.price ? txOut.price.toString() : '',
+        priceCurrency: txOut.currency || sourceAcc?.currency || db.settings.defaultCurrency || 'EUR',
+        sourceCommission: txOut.commission ? txOut.commission.toString() : '',
+        sourceCommissionCurrency: txOut.commissionCurrency || sourceAcc?.currency || db.settings.defaultCurrency || 'EUR',
+        destCommission: txIn.commission ? txIn.commission.toString() : '',
+        destCommissionCurrency: txIn.commissionCurrency || destAcc?.currency || db.settings.defaultCurrency || 'EUR',
+        date: txOut.date.substring(0, 16),
+        criteria: txOut.transferCriteria || 'FIFO',
+        notes: txOut.notes || ''
+      });
+      setFormErr('');
+    } else {
+      setTxForm({
+        open: true,
+        editId: tx.id,
+        portfolioId: tx.portfolioId,
+        date: tx.date.substring(0, 16),
+        type: tx.type,
+        symbol: tx.symbol,
+        qty: tx.qty.toString(),
+        price: tx.price.toString(),
+        commission: tx.commission.toString(),
+        currency: tx.currency || db.settings.defaultCurrency || 'EUR',
+        commissionCurrency: tx.commissionCurrency || tx.currency || db.settings.defaultCurrency || 'EUR',
+        notes: tx.notes || ''
+      });
+      setFormErr('');
+    }
+  };
+
+  const handleImportTransfersList = (importedTransfers: Transfer[]) => {
+    const currentTransfers = db.transfers || [];
+    const currentTransactions = db.transactions || [];
+    const newTransfers = [...currentTransfers];
+    const newTransactions = [...currentTransactions];
+
+    importedTransfers.forEach((tr) => {
+      if (!newTransfers.some(ex => ex.id === tr.id)) {
+        newTransfers.push(tr);
+      }
+    });
+
+    const updatedDb: DBState = {
+      ...db,
+      transfers: newTransfers,
+      transactions: newTransactions
+    };
+
+    setDb(updatedDb);
+    saveDatabaseState(updatedDb);
+  };
+
+  const handleViewConnectedClick = (tx: Transaction) => {
+    const peerId = tx.type === TransactionType.TRANSFER_OUT ? tx.transferInTransactionId : tx.transferOutTransactionId;
+    if (!peerId) return;
+
+    const peerTx = db.transactions.find(t => t.id === peerId);
+    if (!peerTx) return;
+
+    // Reset filters that could hide peerTx
+    if (txFilterBrokerId) {
+      const peerPort = db.portfolios.find(p => p.id === peerTx.portfolioId);
+      if (peerPort && peerPort.accountId !== txFilterBrokerId) {
+        setTxFilterBrokerId('');
+      }
+    }
+    if (txFilterPortfolioId && txFilterPortfolioId !== peerTx.portfolioId) {
+      setTxFilterPortfolioId('');
+    }
+    if (txFilterTypes.length > 0 && !txFilterTypes.includes(peerTx.type)) {
+      setTxFilterTypes([]);
+    }
+    if (txFilterTickers.length > 0 && !txFilterTickers.includes(peerTx.symbol.toUpperCase())) {
+      setTxFilterTickers([peerTx.symbol.toUpperCase()]);
+    }
+
+    setTxHighlightIds([tx.id, peerId]);
+
+    setTimeout(() => {
+      const el = document.getElementById(`tx-row-${peerId}`) || document.getElementById(`tx-card-${peerId}`);
+      if (el) {
+        el.scrollIntoView({ behavior: 'smooth', block: 'center' });
+      }
+    }, 150);
+
+    setTimeout(() => {
+      setTxHighlightIds([]);
+    }, 6000);
+  };
+
+  const handleOpenNewTransfer = (sourcePortfolioId?: string) => {
+    const srcPortId = sourcePortfolioId || (db.portfolios[0]?.id || '');
+    const availSymbols = getAvailableTickersForSource(srcPortId);
+    const defaultSym = availSymbols[0] || '';
+    const lots = getAvailableLots(defaultSym, srcPortId);
+    const total = lots.reduce((sum, l) => sum + l.availableQty, 0);
+    const srcPort = db.portfolios.find(p => p.id === srcPortId);
+    const srcAcc = srcPort ? db.accounts.find(a => a.id === srcPort.accountId) : null;
+    const srcCurr = srcAcc?.currency || db.settings.defaultCurrency || 'EUR';
+    const destPort = db.portfolios.find(p => p.id !== srcPortId);
+    const destAcc = destPort ? db.accounts.find(a => a.id === destPort.accountId) : null;
+    const destCurr = destAcc?.currency || db.settings.defaultCurrency || 'EUR';
+
+    setTransferForm({
+      open: true,
+      editTransferId: null,
+      sourcePortfolioId: srcPortId,
+      destPortfolioId: destPort?.id || '',
+      symbol: defaultSym,
+      qty: total > 0 ? total : '',
+      price: '',
+      priceCurrency: srcCurr,
+      sourceCommission: '',
+      sourceCommissionCurrency: srcCurr,
+      destCommission: '',
+      destCommissionCurrency: destCurr,
+      date: new Date().toISOString().substring(0, 16),
+      criteria: 'FIFO',
+      notes: ''
+    });
+    setFormErr('');
+  };
+
+  const handleEditTransferRecord = (rec: TransferRecord) => {
+    const tr = (db.transfers || []).find(t => t.id === rec.id);
+    const symbol = tr?.symbol || rec.symbol;
+    const qty = tr ? tr.qty.toString() : rec.qty.toString();
+    const price = tr?.price !== undefined ? tr.price.toString() : (rec.price !== undefined ? rec.price.toString() : '');
+    const priceCurrency = tr?.priceCurrency || rec.priceCurrency || 'EUR';
+    const sourcePortfolioId = tr?.sourcePortfolioId || rec.sourcePortfolioId;
+    const destPortfolioId = tr?.destPortfolioId || rec.destPortfolioId;
+    const sourceCommission = tr?.sourceCommission !== undefined ? tr.sourceCommission.toString() : (rec.sourceCommission !== undefined ? rec.sourceCommission.toString() : '');
+    const sourceCommissionCurrency = tr?.sourceCommissionCurrency || rec.sourceCommissionCurrency || 'EUR';
+    const destCommission = tr?.destCommission !== undefined ? tr.destCommission.toString() : (rec.destCommission !== undefined ? rec.destCommission.toString() : '');
+    const destCommissionCurrency = tr?.destCommissionCurrency || rec.destCommissionCurrency || 'EUR';
+    const date = (tr?.date || rec.date).substring(0, 16);
+    const criteria = tr?.criteria || rec.criteria || 'FIFO';
+    const notes = tr?.notes || rec.notes || '';
+
+    setTransferForm({
+      open: true,
+      editTransferId: rec.id,
+      sourcePortfolioId,
+      destPortfolioId,
+      symbol,
+      qty,
+      price,
+      priceCurrency,
+      sourceCommission,
+      sourceCommissionCurrency,
+      destCommission,
+      destCommissionCurrency,
+      date,
+      criteria,
+      notes
+    });
+    setFormErr('');
+  };
+
+  const requestDeleteTransferRecord = (rec: TransferRecord) => {
     setDeleteConfirm({
       open: true,
-      type: 'transaction',
-      id,
-      message: t.confirmDeleteTransaction
+      type: 'transfer',
+      id: rec.id,
+      message: t.confirmDeleteTransfer || 'Questo è un trasferimento di asset collegato. La sua eliminazione rimuoverà contemporaneamente sia l\'operazione in entrata che quella in uscita. Vuoi continuare?'
+    });
+  };
+
+  const requestDeleteTransaction = (id: string) => {
+    const tx = db.transactions.find(t => t.id === id);
+    const isTransfer = tx && (tx.transferInTransactionId || tx.transferOutTransactionId || tx.type === 'TRANSFER_IN' || tx.type === 'TRANSFER_OUT' || tx.transferId);
+    setDeleteConfirm({
+      open: true,
+      type: isTransfer && tx.transferId ? 'transfer' : 'transaction',
+      id: isTransfer && tx.transferId ? tx.transferId : id,
+      message: isTransfer ? (t.confirmDeleteTransfer || 'Questo è un trasferimento di asset collegato. La sua eliminazione rimuoverà contemporaneamente sia l\'operazione in entrata che quella in uscita. Vuoi continuare?') : t.confirmDeleteTransaction
     });
   };
 
@@ -1801,6 +2464,8 @@ export default function App() {
       deleteTransactionMutation(deleteConfirm.id);
     } else if (deleteConfirm.type === 'cost') {
       deleteCostMutation(deleteConfirm.id);
+    } else if (deleteConfirm.type === 'transfer') {
+      deleteTransferMutation(deleteConfirm.id);
     }
     setDeleteConfirm({ open: false, type: 'broker', id: '', message: '' });
   };
@@ -2415,7 +3080,7 @@ export default function App() {
         if (typeof result === 'string') {
           const parsed = JSON.parse(result);
           // Basic validation
-          if (parsed && (parsed.settings || parsed.accounts || parsed.portfolios || parsed.transactions)) {
+          if (parsed && (parsed.settings || parsed.accounts || parsed.portfolios || parsed.transactions || parsed.transfers || parsed.otherCosts)) {
             setPendingImport(parsed);
           } else {
             alert(t.invalidBackupFile);
@@ -2438,6 +3103,7 @@ export default function App() {
       accounts: pendingImport.accounts || [],
       portfolios: pendingImport.portfolios || [],
       transactions: pendingImport.transactions || [],
+      transfers: pendingImport.transfers || [],
       otherCosts: pendingImport.otherCosts || [],
       priceCache: pendingImport.priceCache || {}
     };
@@ -2461,6 +3127,7 @@ export default function App() {
       portfolios: [...db.portfolios],
       accounts: [...db.accounts],
       transactions: [...db.transactions],
+      transfers: [...(db.transfers || [])],
       otherCosts: [...(db.otherCosts || [])],
       priceCache: JSON.parse(JSON.stringify(db.priceCache))
     };
@@ -2480,6 +3147,12 @@ export default function App() {
     if (pendingImport.transactions) {
       pendingImport.transactions.forEach((tx: Transaction) => {
         if (!newDb.transactions.find(ex => ex.id === tx.id)) newDb.transactions.push(tx);
+      });
+    }
+
+    if (pendingImport.transfers) {
+      pendingImport.transfers.forEach((tr: Transfer) => {
+        if (!newDb.transfers!.find(ex => ex.id === tr.id)) newDb.transfers!.push(tr);
       });
     }
 
@@ -2515,7 +3188,7 @@ export default function App() {
       
       {/* Top Navbar Header */}
       <header className="border-b border-slate-800/80 bg-[#070b16]/70 backdrop-blur-md sticky top-0 z-40">
-        <div className="max-w-7xl mx-auto px-4 md:px-6 py-4 flex items-center justify-between gap-4">
+        <div className="mx-auto px-4 md:px-6 py-4 flex items-center justify-between gap-4">
           <div className="flex items-center gap-3">
             <button
               className="lg:hidden p-2 -ml-2 text-slate-400 hover:text-white rounded-lg hover:bg-slate-800 transition"
@@ -2587,7 +3260,7 @@ export default function App() {
         </div>
       </header>
 
-      <div className="flex-1 max-w-7xl w-full mx-auto px-4 md:px-6 py-6 flex flex-col lg:flex-row gap-8 relative">
+      <div className="flex-1 w-full mx-auto px-4 md:px-6 py-6 flex flex-col lg:flex-row gap-8 relative">
         
         {/* Navigation Sidebar */}
         <nav className={`
@@ -2929,20 +3602,29 @@ export default function App() {
               </div>
 
               {/* Extra Professional Key-Performance Indicators */}
-              <div className="grid md:grid-cols-3 gap-4">
-                <div className="bg-slate-900/20 p-4 rounded-2xl border border-slate-800/60 flex items-center justify-between text-xs hover:border-emerald-500/10 transition-all duration-300">
-                  <span className="text-slate-400 uppercase tracking-widest font-mono font-black text-[10px]">{t.annualizedReturn}</span>
-                  <span className="font-bold font-mono text-emerald-400 text-sm">{mwrrReturn.toFixed(2)}%</span>
+              <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
+                <div className="bg-slate-900/20 p-4 rounded-2xl border border-slate-800/60 flex flex-col justify-between gap-1 text-xs hover:border-emerald-500/10 transition-all duration-300">
+                  <span className="text-slate-400 uppercase tracking-widest font-mono font-black text-[10px]">{t.twrrReturn || 'TWRR Return'}</span>
+                  <span className={`font-bold font-mono text-sm ${overallPortfolioPerformance.twrrPercentage >= 0 ? 'text-emerald-400' : 'text-rose-500'}`}>
+                    {overallPortfolioPerformance.twrrPercentage >= 0 ? '+' : ''}{overallPortfolioPerformance.twrrPercentage.toFixed(2)}%
+                  </span>
                 </div>
 
-                <div className="bg-slate-900/20 p-4 rounded-2xl border border-slate-800/60 flex items-center justify-between text-xs hover:border-emerald-500/10 transition-all duration-300">
+                <div className="bg-slate-900/20 p-4 rounded-2xl border border-slate-800/60 flex flex-col justify-between gap-1 text-xs hover:border-emerald-500/10 transition-all duration-300">
+                  <span className="text-slate-400 uppercase tracking-widest font-mono font-black text-[10px]">{t.annualizedReturn || 'MWRR (Annualized)'}</span>
+                  <span className={`font-bold font-mono text-sm ${overallPortfolioPerformance.mwrrAnnualized >= 0 ? 'text-emerald-400' : 'text-rose-500'}`}>
+                    {overallPortfolioPerformance.mwrrAnnualized >= 0 ? '+' : ''}{overallPortfolioPerformance.mwrrAnnualized.toFixed(2)}%
+                  </span>
+                </div>
+
+                <div className="bg-slate-900/20 p-4 rounded-2xl border border-slate-800/60 flex flex-col justify-between gap-1 text-xs hover:border-emerald-500/10 transition-all duration-300">
                   <span className="text-slate-400 uppercase tracking-widest font-mono font-black text-[10px]">{t.volatility}</span>
-                  <span className="font-bold font-mono text-amber-500 text-sm">{volatility.toFixed(1)}%</span>
+                  <span className="font-bold font-mono text-amber-500 text-sm">{overallPortfolioPerformance.volatility.toFixed(1)}%</span>
                 </div>
 
-                <div className="bg-slate-900/20 p-4 rounded-2xl border border-slate-800/60 flex items-center justify-between text-xs hover:border-emerald-500/10 transition-all duration-300">
+                <div className="bg-slate-900/20 p-4 rounded-2xl border border-slate-800/60 flex flex-col justify-between gap-1 text-xs hover:border-emerald-500/10 transition-all duration-300">
                   <span className="text-slate-400 uppercase tracking-widest font-mono font-black text-[10px]">{t.maxDrawdown}</span>
-                  <span className="font-bold font-mono text-rose-500 text-sm">-{maxDrawdown.toFixed(1)}%</span>
+                  <span className="font-bold font-mono text-rose-500 text-sm">-{overallPortfolioPerformance.maxDrawdown.toFixed(1)}%</span>
                 </div>
               </div>
 
@@ -2986,6 +3668,9 @@ export default function App() {
                 }}
                 activeTxSorted={activeTxSorted}
                 activeOtherCosts={activeOtherCosts}
+                allTransactions={db.transactions}
+                activePortIds={activePortIds}
+                targetSymbol={tickerFilterSymbol}
                 convertValue={convertValue}
                 selectedCurrency={selectedCurrency}
                 inflationIndices={db.settings.inflationIndices}
@@ -2994,6 +3679,22 @@ export default function App() {
                   const newDb = { ...db, settings: { ...db.settings, selectedInflationId: id } };
                   saveDatabaseState(newDb);
                 }}
+                positionsTableNode={
+                  <PositionsTable
+                    t={t}
+                    lang={lang}
+                    tickerMetrics={tickerMetrics}
+                    totalPortfolioNominalValue={totalNominalValue}
+                    selectedCurrency={selectedCurrency}
+                    convertValue={convertValue}
+                    portfolios={db.portfolios}
+                    onSelectTicker={(sym) => {
+                      setDashFilter({ type: 'TICKER', id: sym });
+                      window.scrollTo({ top: 0, behavior: 'smooth' });
+                    }}
+                    formatCurrency={formatCurrency}
+                  />
+                }
               />
             </div>
           )}
@@ -3248,29 +3949,39 @@ export default function App() {
 
                                   <div className="flex justify-between items-center text-xs text-slate-400 font-mono pt-1">
                                     <span>{t.operationsCountLabel} <strong className="text-slate-200">{pTx.length}</strong></span>
-                                    <button
-                                      onClick={() => {
-                                        const prt = db.portfolios.find(p => p.id === port.id);
-                                        const acc = prt ? db.accounts.find(a => a.id === prt.accountId) : null;
-                                        const accCurr = acc?.currency || db.settings.defaultCurrency || 'EUR';
-                                        setTxForm({
-                                          open: true,
-                                          portfolioId: port.id,
-                                          date: new Date().toISOString().substring(0,16),
-                                          type: TransactionType.BUY,
-                                          symbol: '',
-                                          qty: 0,
-                                          price: 0,
-                                          commission: 0,
-                                          currency: accCurr,
-                                          commissionCurrency: accCurr,
-                                          notes: ''
-                                        });
-                                      }}
-                                      className="text-emerald-400 hover:text-emerald-300 hover:underline flex items-center gap-0.5 font-bold transition-all duration-300 cursor-pointer"
-                                    >
-                                      <Plus className="w-3.5 h-3.5" /> {t.addTransaction}
-                                    </button>
+                                    <div className="flex items-center gap-3">
+                                      <button
+                                        onClick={() => handleOpenNewTransfer(port.id)}
+                                        className="text-amber-400 hover:text-amber-300 hover:underline flex items-center gap-1 font-bold transition-all duration-300 cursor-pointer"
+                                      >
+                                        <RefreshCw className="w-3 h-3" /> {t.transferBtn}
+                                      </button>
+                                      <button
+                                        onClick={() => {
+                                          const prt = db.portfolios.find(p => p.id === port.id);
+                                          const acc = prt ? db.accounts.find(a => a.id === prt.accountId) : null;
+                                          const accCurr = acc?.currency || db.settings.defaultCurrency || 'EUR';
+                                          setTxForm({
+                                            open: true,
+                                            editId: null,
+                                            portfolioId: port.id,
+                                            date: new Date().toISOString().substring(0,16),
+                                            type: TransactionType.BUY,
+                                            symbol: '',
+                                            qty: '',
+                                            price: '',
+                                            commission: '',
+                                            currency: accCurr,
+                                            commissionCurrency: accCurr,
+                                            notes: ''
+                                          });
+                                          setFormErr('');
+                                        }}
+                                        className="text-emerald-400 hover:text-emerald-300 hover:underline flex items-center gap-0.5 font-bold transition-all duration-300 cursor-pointer"
+                                      >
+                                        <Plus className="w-3.5 h-3.5" /> {t.addTransaction}
+                                      </button>
+                                    </div>
                                   </div>
                                 </div>
                               );
@@ -3282,197 +3993,64 @@ export default function App() {
                   })}
                 </div>
               )}
-                        {/* Add/Edit Transaction Forms block if open */}
-              {txForm.open && (
-                <div className="bg-slate-900/40 border border-slate-800/80 p-6 rounded-2xl space-y-4 backdrop-blur-md">
-                  <h3 className="font-bold text-sm text-white flex items-center gap-2 border-b border-slate-800 pb-2">
-                    <Coins className="w-4 h-4 text-emerald-400" />
-                    {txForm.editId ? `${t.allOption === 'Tutti' ? 'Modifica Operazione' : t.allOption === 'Todos' ? 'Modificar Operación' : t.allOption === 'Tous' ? 'Modifier la Transaction' : t.allOption === '全部' ? '修改交易记录' : 'Edit Transaction'} ${txForm.symbol}` : t.registerNewTransactionTitle}
-                  </h3>
 
-                  <div className="grid md:grid-cols-4 gap-4 text-xs">
-                    {/* Portfolio Selector Dropdown */}
-                    <div className="space-y-1.5">
-                      <label className="text-slate-400 font-semibold">{t.belongingPortfolioLabel}</label>
-                      <select
-                        value={txForm.portfolioId}
-                        onChange={(e) => {
-                          const portId = e.target.value;
-                          const selectedP = db.portfolios.find(p => p.id === portId);
-                          const selectedAcc = selectedP ? db.accounts.find(a => a.id === selectedP.accountId) : null;
-                          const brokerCurr = selectedAcc?.currency || db.settings.defaultCurrency || 'EUR';
-                          setTxForm({
-                            ...txForm,
-                            portfolioId: portId,
-                            currency: brokerCurr,
-                            commissionCurrency: brokerCurr
-                          });
-                        }}
-                        className="bg-slate-950/80 border border-slate-800 focus:outline-none focus:ring-2 focus:ring-emerald-500/20 focus:border-emerald-500/80 px-3 py-2 text-white rounded-xl w-full font-sans font-bold transition-all duration-300"
-                      >
-                        <option value="">{t.selectPortfolioOptionPlaceholder}</option>
-                        {db.portfolios.map((p) => {
-                          const acc = db.accounts.find(a => a.id === p.accountId);
-                          return (
-                            <option key={p.id} value={p.id}>
-                              {p.name} ({acc?.name || t.withoutBrokerOption})
-                            </option>
-                          );
-                        })}
-                      </select>
-                    </div>
+              {/* Dedicated Transfers Registry Table */}
+              <TransfersTable
+                transfers={getTransferRecords()}
+                onNewTransfer={() => handleOpenNewTransfer()}
+                onEdit={handleEditTransferRecord}
+                onDelete={requestDeleteTransferRecord}
+                t={t}
+                formatDateString={formatDateString}
+                formatFullQuantity={formatFullQuantity}
+                formatCurrency={formatCurrency}
+                lang={lang}
+                onImportTransfers={handleImportTransfersList}
+                dbTransfersRaw={db.transfers}
+              />
 
-                    <div className="space-y-1.5">
-                      <label className="text-slate-400 font-semibold">{t.dateLabel}</label>
-                      <input
-                        type="datetime-local"
-                        value={txForm.date}
-                        onChange={(e) => setTxForm({ ...txForm, date: e.target.value })}
-                        className="bg-slate-950/80 border border-slate-800 focus:outline-none focus:ring-2 focus:ring-emerald-500/20 focus:border-emerald-500/80 px-3 py-2 text-white rounded-xl w-full font-mono transition-all duration-300"
-                      />
-                    </div>
+              {/* Modals for Transaction and Transfer */}
+              <TransactionModal
+                isOpen={txForm.open}
+                onClose={() => setTxForm({ open: false, editId: null, portfolioId: '', date: '', type: TransactionType.BUY, symbol: '', qty: '', price: '', commission: '', currency: 'EUR', commissionCurrency: 'EUR', notes: '' })}
+                txForm={txForm}
+                setTxForm={setTxForm}
+                onSave={saveTransactionMutation}
+                formErr={formErr}
+                db={db}
+                t={t}
+                activeCurrencies={activeCurrencies}
+                lang={lang}
+              />
 
-                    <div className="space-y-1.5">
-                      <label className="text-slate-400 font-semibold">{t.transactionTypeLabel}</label>
-                      <div className="grid grid-cols-2 gap-1 bg-slate-950 p-1 border border-slate-800 rounded-xl">
-                        <button
-                          onClick={() => setTxForm({ ...txForm, type: TransactionType.BUY })}
-                          className={`py-1.5 rounded-lg font-bold text-xs transition duration-300 cursor-pointer ${
-                            txForm.type === TransactionType.BUY ? 'bg-emerald-600 text-white shadow-md' : 'text-slate-400 hover:text-white'
-                          }`}
-                        >
-                          {t.buyBtn}
-                        </button>
-                        <button
-                          onClick={() => setTxForm({ ...txForm, type: TransactionType.SELL })}
-                          className={`py-1.5 rounded-lg font-bold text-xs transition duration-300 cursor-pointer ${
-                            txForm.type === TransactionType.SELL ? 'bg-rose-600 text-white shadow-md' : 'text-slate-400 hover:text-white'
-                          }`}
-                        >
-                          {t.sellBtn}
-                        </button>
-                      </div>
-                    </div>
-
-                    <div className="space-y-1.5">
-                      <label className="text-slate-400 font-semibold">{t.tickerLabel}</label>
-                      <TickerInput
-                        value={txForm.symbol}
-                        onChange={(val) => setTxForm({ ...txForm, symbol: val.toUpperCase() })}
-                        placeholder={t.allOption === 'Tutti' ? 'VWCE.MI o VAGF.MI o BTC' : t.allOption === 'Todos' ? 'VWCE.MI o VAGF.MI o BTC' : t.allOption === 'Tous' ? 'VWCE.MI ou VAGF.MI ou BTC' : t.allOption === '全部' ? '例如：VWCE.MI 或 VAGF.MI 或 BTC' : t.allOption === 'الكل' ? 'مثال: VWCE.MI أو VAGF.MI أو BTC' : 'VWCE.MI or VAGF.MI or BTC'}
-                        className="bg-slate-950/80 border border-slate-800 focus:outline-none focus:ring-2 focus:ring-emerald-500/20 focus:border-emerald-500/80 px-3 py-2 text-white rounded-xl w-full font-mono uppercase transition-all duration-300"
-                        portfolioSymbols={Array.from(new Set(db.transactions.map(t => t.symbol)))}
-                      />
-                    </div>
-
-                    <div className="space-y-1.5">
-                      <label className="text-slate-400 font-semibold">{t.qtyLabel}</label>
-                      <input
-                        type="number"
-                        step="any"
-                        value={txForm.qty || ''}
-                        onChange={(e) => setTxForm({ ...txForm, qty: Number(e.target.value) })}
-                        className="bg-slate-950/80 border border-slate-800 focus:outline-none focus:ring-2 focus:ring-emerald-500/20 focus:border-emerald-500/80 px-3 py-2 text-white rounded-xl w-full font-mono transition-all duration-300"
-                      />
-                    </div>
-
-                    <div className="grid grid-cols-3 gap-2">
-                      <div className="col-span-2 space-y-1.5">
-                        <label className="text-slate-400 font-semibold">{t.priceLabel}</label>
-                        <input
-                          type="number"
-                          step="any"
-                          value={txForm.price || ''}
-                          onChange={(e) => setTxForm({ ...txForm, price: Number(e.target.value) })}
-                          className="bg-slate-950/80 border border-slate-800 focus:outline-none focus:ring-2 focus:ring-emerald-500/20 focus:border-emerald-500/80 px-3 py-2 text-white rounded-xl w-full font-mono transition-all duration-300"
-                        />
-                      </div>
-                      <div className="space-y-1.5">
-                        <label className="text-slate-400 font-semibold">{t.currencyLabel}</label>
-                        <select
-                          value={txForm.currency}
-                          onChange={(e) => setTxForm({ ...txForm, currency: e.target.value })}
-                          className="bg-slate-950/80 border border-slate-800 focus:outline-none focus:ring-2 focus:ring-emerald-500/20 focus:border-emerald-500/80 px-2.5 py-2 text-white rounded-xl w-full font-mono transition-all duration-305 text-xs select-none"
-                        >
-                          {activeCurrencies.map(cur => (
-                            <option key={cur} value={cur}>{cur}</option>
-                          ))}
-                        </select>
-                      </div>
-                    </div>
-
-                    <div className="grid grid-cols-3 gap-2">
-                      <div className="col-span-2 space-y-1.5">
-                        <label className="text-slate-400 font-semibold">{t.commissionLabel}</label>
-                        <input
-                          type="number"
-                          step="any"
-                          value={txForm.commission || ''}
-                          onChange={(e) => setTxForm({ ...txForm, commission: Number(e.target.value) })}
-                          className="bg-slate-950/80 border border-slate-800 focus:outline-none focus:ring-2 focus:ring-emerald-500/20 focus:border-emerald-500/80 px-3 py-2 text-white rounded-xl w-full font-mono transition-all duration-300"
-                        />
-                      </div>
-                      <div className="space-y-1.5">
-                        <label className="text-slate-400 font-semibold">{t.commissionCurrencyLabel}</label>
-                        <select
-                          value={txForm.commissionCurrency}
-                          onChange={(e) => setTxForm({ ...txForm, commissionCurrency: e.target.value })}
-                          className="bg-slate-950/80 border border-slate-800 focus:outline-none focus:ring-2 focus:ring-emerald-500/20 focus:border-emerald-500/80 px-2.5 py-2 text-white rounded-xl w-full font-mono transition-all duration-305 text-xs select-none"
-                        >
-                          {activeCurrencies.map(cur => (
-                            <option key={cur} value={cur}>{cur}</option>
-                          ))}
-                        </select>
-                      </div>
-                    </div>
-
-                    <div className="space-y-1.5">
-                      <label className="text-slate-400 font-semibold">{t.notesLabel}</label>
-                      <input
-                        type="text"
-                        value={txForm.notes}
-                        onChange={(e) => setTxForm({ ...txForm, notes: e.target.value })}
-                        placeholder={t.notesPlaceholder}
-                        className="bg-slate-950/80 border border-slate-800 focus:outline-none focus:ring-2 focus:ring-emerald-500/20 focus:border-emerald-500/80 px-3 py-2 text-white rounded-xl w-full transition-all duration-300"
-                      />
-                    </div>
-                  </div>
-
-                  {formErr && (
-                    <div className="bg-rose-950/20 text-rose-400 p-3 text-xs rounded-xl border border-rose-500/15 font-mono select-text">
-                      {formErr}
-                    </div>
-                  )}
-
-                  <div className="flex gap-2 justify-end text-xs pt-2">
-                    <button
-                      onClick={() => setTxForm({ open: false, editId: null, portfolioId: '', date: '', type: TransactionType.BUY, symbol: '', qty: 0, price: 0, commission: 0, notes: '' })}
-                      className="bg-slate-800 hover:bg-slate-700 text-slate-300 px-4 py-2 rounded-xl font-bold transition-all duration-300 cursor-pointer"
-                    >
-                      {t.cancel}
-                    </button>
-                    <button
-                      onClick={saveTransactionMutation}
-                      className="bg-emerald-600 hover:bg-emerald-500 text-white px-4 py-2 rounded-xl font-bold font-sans transition-all duration-300 transform hover:-translate-y-0.5 cursor-pointer shadow-lg shadow-emerald-950/20"
-                    >
-                      {t.saveTransactionBtn}
-                    </button>
-                  </div>
-                </div>
-              )}
+              <TransferModal
+                isOpen={transferForm.open}
+                onClose={() => setTransferForm({ open: false, editTransferId: null, sourcePortfolioId: '', destPortfolioId: '', symbol: '', qty: '', price: '', priceCurrency: 'EUR', sourceCommission: '', sourceCommissionCurrency: 'EUR', destCommission: '', destCommissionCurrency: 'EUR', date: new Date().toISOString().substring(0, 16), criteria: 'FIFO', notes: '' })}
+                transferForm={transferForm}
+                setTransferForm={setTransferForm}
+                onSave={saveTransferMutation}
+                formErr={formErr}
+                db={db}
+                t={t}
+                activeCurrencies={activeCurrencies}
+                getAvailableTickersForSource={getAvailableTickersForSource}
+                getAvailableLots={getAvailableLots}
+                formatFullQuantity={formatFullQuantity}
+                lang={lang}
+              />
 
               {/* Master Register listing all historical Transactions */}
               <div className="bg-slate-900/40 p-6 rounded-2xl border border-slate-800/80 space-y-4 shadow-sm">
                 <div className="flex flex-col md:flex-row items-start md:items-center justify-between gap-3 border-b border-slate-800/60 pb-3">
                   <div className="flex items-center gap-2.5">
                     <h3 className="font-extrabold text-sm text-white tracking-wide uppercase font-mono">{t.historicalTransactionsRegistryTitle}</h3>
-                    {(txFilterBrokerId || txFilterPortfolioId || txFilterType || txFilterTicker || txFilterDateStart || txFilterDateEnd) && (
+                    {(txFilterBrokerId || txFilterPortfolioId || txFilterDateStart || txFilterDateEnd || txFilterTypes.length > 0 || txFilterTickers.length > 0) && (
                       <button
                         onClick={() => {
                           setTxFilterBrokerId('');
                           setTxFilterPortfolioId('');
-                          setTxFilterType('');
-                          setTxFilterTicker('');
+                          setTxFilterTypes([]);
+                          setTxFilterTickers([]);
                           setTxFilterDateStart('');
                           setTxFilterDateEnd('');
                         }}
@@ -3482,9 +4060,71 @@ export default function App() {
                       </button>
                     )}
                   </div>
-                  <span className="text-[10px] text-slate-500 font-mono">
-                    {t.foundXOfYLabel.replace('{count}', String(getProcessedTransactions().length)).replace('{total}', String(db.transactions.length))}
-                  </span>
+                  <div className="flex items-center gap-3 self-end md:self-auto relative">
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setColumnDropdownOpen(!columnDropdownOpen);
+                        setTypeDropdownOpen(false);
+                        setTickerDropdownOpen(false);
+                      }}
+                      className="text-[10px] text-emerald-400 hover:text-emerald-300 font-extrabold cursor-pointer transition font-mono uppercase border border-emerald-950/45 bg-emerald-950/20 px-2.5 py-1 rounded-lg flex items-center gap-1.5 focus:outline-none"
+                    >
+                      <span>{t.columnsLabel}</span>
+                      <span className="text-[8px]">▼</span>
+                    </button>
+
+                    {columnDropdownOpen && (
+                      <>
+                        <div className="fixed inset-0 z-40 bg-black/20" onClick={() => setColumnDropdownOpen(false)}></div>
+                        <div 
+                          onClick={(e) => e.stopPropagation()} 
+                          className="absolute right-0 top-8 w-56 max-w-[calc(100vw-2rem)] bg-slate-900 border border-slate-700/80 rounded-xl shadow-2xl z-50 p-2.5 space-y-1 text-xs max-h-80 overflow-y-auto"
+                        >
+                          {[
+                            { id: 'date', label: t.dateLabel || 'Data' },
+                            { id: 'portfolio', label: t.allOption === 'Tutti' ? 'Portafoglio' : 'Portfolio' },
+                            { id: 'type', label: t.allOption === 'Tutti' ? 'Tipo' : 'Type' },
+                            { id: 'symbol', label: t.tickerLabel || 'Ticker' },
+                            { id: 'qty', label: t.qtyLabel || 'Quantità' },
+                            { id: 'price', label: t.priceLabel || 'Prezzo' },
+                            { id: 'total', label: t.allOption === 'Tutti' ? 'Totale' : 'Total' },
+                            { id: 'currentValue', label: t.allOption === 'Tutti' ? 'Valore Attuale' : 'Current Value' },
+                            { id: 'commission', label: t.commissionLabel || 'Commissioni' },
+                            { id: 'notes', label: t.notesLabel || 'Note' }
+                          ].map((col) => {
+                            const isChecked = txVisibleColumns.includes(col.id);
+                            return (
+                              <label
+                                key={col.id}
+                                className="flex items-center gap-2 px-2 py-1.5 hover:bg-slate-800 rounded cursor-pointer transition text-slate-300 hover:text-white select-none font-sans font-bold"
+                              >
+                                <input
+                                  type="checkbox"
+                                  checked={isChecked}
+                                  onChange={() => {
+                                    if (isChecked) {
+                                      if (txVisibleColumns.length > 1) {
+                                        setTxVisibleColumns(txVisibleColumns.filter(x => x !== col.id));
+                                      }
+                                    } else {
+                                      setTxVisibleColumns([...txVisibleColumns, col.id]);
+                                    }
+                                  }}
+                                  className="accent-emerald-500 rounded text-emerald-500 focus:ring-0 focus:ring-offset-0 cursor-pointer"
+                                />
+                                <span className="capitalize">{col.label}</span>
+                              </label>
+                            );
+                          })}
+                        </div>
+                      </>
+                    )}
+
+                    <span className="text-[10px] text-slate-500 font-mono">
+                      {t.foundXOfYLabel.replace('{count}', String(getProcessedTransactions().length)).replace('{total}', String(db.transactions.length))}
+                    </span>
+                  </div>
                 </div>
 
                 {/* Filters dashboard */}
@@ -3524,28 +4164,123 @@ export default function App() {
                       </select>
                     </div>
 
-                    <div className="space-y-1">
-                      <label className="text-slate-500 font-bold block font-mono uppercase text-[9px] tracking-wider">{t.allOption === 'Tutti' ? 'Tipo' : t.allOption === 'Todos' ? 'Tipo' : t.allOption === 'Tous' ? 'Type' : t.allOption === '全部' ? '交易类型' : t.allOption === 'الكل' ? 'النوع' : 'Type'}</label>
-                      <select
-                        value={txFilterType}
-                        onChange={(e) => setTxFilterType(e.target.value)}
-                        className="bg-slate-900 border border-slate-800 text-white rounded px-2 py-1.5 w-full select-none outline-none font-medium text-xs font-sans"
+                    {/* Tipo Multiselect */}
+                    <div className="space-y-1 relative">
+                      <label className="text-slate-500 font-bold block font-mono uppercase text-[9px] tracking-wider">
+                        {t.allOption === 'Tutti' ? 'Tipo' : 'Type'}
+                      </label>
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setTypeDropdownOpen(!typeDropdownOpen);
+                          setTickerDropdownOpen(false);
+                          setColumnDropdownOpen(false);
+                        }}
+                        className="bg-slate-900 border border-slate-800 text-white rounded px-3 py-1.5 w-full text-left font-medium text-xs font-sans flex items-center justify-between cursor-pointer focus:outline-none focus:ring-1 focus:ring-emerald-500/35"
                       >
-                        <option value="">{t.allOption}</option>
-                        <option value={TransactionType.BUY}>{t.buyOption}</option>
-                        <option value={TransactionType.SELL}>{t.sellOption}</option>
-                      </select>
+                        <span className="truncate">
+                          {txFilterTypes.length === 0
+                            ? t.allOption
+                            : txFilterTypes.map(typ => getTypeLabel(typ)).join(', ')}
+                        </span>
+                        <span className="text-[10px] text-slate-500">▼</span>
+                      </button>
+
+                      {typeDropdownOpen && (
+                        <>
+                          <div className="fixed inset-0 z-10" onClick={() => setTypeDropdownOpen(false)}></div>
+                          <div className="absolute left-0 mt-1 w-full bg-slate-900 border border-slate-800 rounded-lg shadow-xl z-20 p-2 space-y-1 max-h-60 overflow-y-auto">
+                            {[TransactionType.BUY, TransactionType.SELL, TransactionType.TRANSFER_IN, TransactionType.TRANSFER_OUT].map((typ) => {
+                              const isChecked = txFilterTypes.includes(typ);
+                              return (
+                                <label
+                                  key={typ}
+                                  className="flex items-center gap-2 px-2 py-1.5 hover:bg-slate-800 rounded cursor-pointer transition text-xs font-bold text-slate-300 hover:text-white select-none"
+                                >
+                                  <input
+                                    type="checkbox"
+                                    checked={isChecked}
+                                    onChange={() => {
+                                      if (isChecked) {
+                                        setTxFilterTypes(txFilterTypes.filter(x => x !== typ));
+                                      } else {
+                                        setTxFilterTypes([...txFilterTypes, typ]);
+                                      }
+                                    }}
+                                    className="accent-emerald-500 rounded text-emerald-500 focus:ring-0 focus:ring-offset-0 cursor-pointer"
+                                  />
+                                  <span>{getTypeLabel(typ)}</span>
+                                </label>
+                              );
+                            })}
+                          </div>
+                        </>
+                      )}
                     </div>
 
-                    <div className="space-y-1">
-                      <label className="text-slate-500 font-bold block font-mono uppercase text-[9px] tracking-wider">{t.tickerLabel}</label>
-                      <input
-                        type="text"
-                        placeholder={t.allOption === 'Tutti' ? 'Es. SWDA' : t.allOption === 'Todos' ? 'Ej. SWDA' : t.allOption === 'Tous' ? 'Ex. SWDA' : t.allOption === '全部' ? '例如：SWDA' : t.allOption === 'الكل' ? 'مثال: SWDA' : 'e.g. SWDA'}
-                        value={txFilterTicker}
-                        onChange={(e) => setTxFilterTicker(e.target.value)}
-                        className="bg-slate-900 border border-slate-800 text-white rounded px-2 py-1.5 w-full uppercase font-mono text-xs"
-                      />
+                    {/* Ticker Multiselect */}
+                    <div className="space-y-1 relative">
+                      <label className="text-slate-500 font-bold block font-mono uppercase text-[9px] tracking-wider">
+                        {t.tickerLabel}
+                      </label>
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setTickerDropdownOpen(!tickerDropdownOpen);
+                          setTypeDropdownOpen(false);
+                          setColumnDropdownOpen(false);
+                        }}
+                        className="bg-slate-900 border border-slate-800 text-white rounded px-3 py-1.5 w-full text-left font-medium text-xs font-sans flex items-center justify-between cursor-pointer focus:outline-none focus:ring-1 focus:ring-emerald-500/35"
+                      >
+                        <span className="truncate">
+                          {txFilterTickers.length === 0
+                            ? t.allOption
+                            : txFilterTickers.join(', ')}
+                        </span>
+                        <span className="text-[10px] text-slate-500">▼</span>
+                      </button>
+
+                      {tickerDropdownOpen && (
+                        <>
+                          <div className="fixed inset-0 z-10" onClick={() => setTickerDropdownOpen(false)}></div>
+                          <div className="absolute left-0 mt-1 w-64 bg-slate-900 border border-slate-800 rounded-lg shadow-xl z-20 p-2 space-y-2 max-h-60 overflow-y-auto">
+                            <input
+                              type="text"
+                              value={tickerSearchQuery}
+                              onChange={(e) => setTickerSearchQuery(e.target.value)}
+                              placeholder={t.allOption === 'Tutti' ? 'Cerca...' : 'Search...'}
+                              className="w-full bg-slate-950 border border-slate-800 text-white rounded px-2 py-1 text-xs focus:outline-none focus:border-emerald-500/50"
+                            />
+                            <div className="space-y-1 max-h-40 overflow-y-auto">
+                              {Array.from<string>(new Set(db.transactions.map(t => t.symbol.toUpperCase()))).sort()
+                                .filter((ticker: string) => ticker.includes(tickerSearchQuery.toUpperCase()))
+                                .map((ticker: string) => {
+                                  const isChecked = txFilterTickers.includes(ticker);
+                                  return (
+                                    <label
+                                      key={ticker}
+                                      className="flex items-center gap-2 px-2 py-1 hover:bg-slate-800 rounded cursor-pointer transition text-xs font-bold font-mono text-slate-300 hover:text-white select-none"
+                                    >
+                                      <input
+                                        type="checkbox"
+                                        checked={isChecked}
+                                        onChange={() => {
+                                          if (isChecked) {
+                                            setTxFilterTickers(txFilterTickers.filter(x => x !== ticker));
+                                          } else {
+                                            setTxFilterTickers([...txFilterTickers, ticker]);
+                                          }
+                                        }}
+                                        className="accent-emerald-500 rounded text-emerald-500 focus:ring-0 focus:ring-offset-0 cursor-pointer"
+                                      />
+                                      <span>{ticker}</span>
+                                    </label>
+                                  );
+                                })}
+                            </div>
+                          </div>
+                        </>
+                      )}
                     </div>
 
                     <div className="space-y-1">
@@ -3580,35 +4315,170 @@ export default function App() {
                     <table className="w-full text-left border-collapse text-xs select-text">
                       <thead>
                         <tr className="border-b border-slate-800 bg-slate-900/40 text-slate-400 uppercase tracking-widest font-mono font-black text-[10px]">
-                          <th className="py-3 px-4 cursor-pointer select-none hover:text-white transition" onClick={() => handleTxSort('date')}>
-                            {t.dateLabel} {txSortField === 'date' ? (txSortAsc ? '▲' : '▼') : ''}
+                          {txVisibleColumns.includes('date') && (
+                            <th 
+                              style={{ width: columnWidths['date'] ? `${columnWidths['date']}px` : undefined, minWidth: '80px' }}
+                              className="relative py-3 px-4 cursor-pointer select-none hover:text-white transition group" 
+                              onClick={() => handleTxSort('date')}
+                            >
+                              <div className="flex items-center justify-between">
+                                <span>{t.dateLabel} {txSortField === 'date' ? (txSortAsc ? '▲' : '▼') : ''}</span>
+                              </div>
+                              <div
+                                onMouseDown={(e) => handleMouseDownResize('date', e)}
+                                onClick={(e) => e.stopPropagation()}
+                                className="absolute right-0 top-0 bottom-0 w-1.5 cursor-col-resize hover:bg-emerald-500/50 transition-colors"
+                              />
+                            </th>
+                          )}
+                          {txVisibleColumns.includes('portfolio') && (
+                            <th 
+                              style={{ width: columnWidths['portfolio'] ? `${columnWidths['portfolio']}px` : undefined, minWidth: '90px' }}
+                              className="relative py-3 px-4 cursor-pointer select-none hover:text-white transition group" 
+                              onClick={() => handleTxSort('portfolio')}
+                            >
+                              <div className="flex items-center justify-between">
+                                <span>{t.allOption === 'Tutti' ? 'Portafoglio' : t.allOption === 'Todos' ? 'Cartera' : t.allOption === 'Tous' ? 'Portefeuille' : t.allOption === '全部' ? '投资组合' : t.allOption === 'الكل' ? 'المحفظة' : 'Portfolio'} {txSortField === 'portfolio' ? (txSortAsc ? '▲' : '▼') : ''}</span>
+                              </div>
+                              <div
+                                onMouseDown={(e) => handleMouseDownResize('portfolio', e)}
+                                onClick={(e) => e.stopPropagation()}
+                                className="absolute right-0 top-0 bottom-0 w-1.5 cursor-col-resize hover:bg-emerald-500/50 transition-colors"
+                              />
+                            </th>
+                          )}
+                          {txVisibleColumns.includes('type') && (
+                            <th 
+                              style={{ width: columnWidths['type'] ? `${columnWidths['type']}px` : undefined, minWidth: '90px' }}
+                              className="relative py-3 px-4 cursor-pointer select-none hover:text-white transition group" 
+                              onClick={() => handleTxSort('type')}
+                            >
+                              <div className="flex items-center justify-between">
+                                <span>{t.allOption === 'Tutti' ? 'Tipo' : t.allOption === 'Todos' ? 'Tipo' : t.allOption === 'Tous' ? 'Type' : t.allOption === '全部' ? '交易类型' : t.allOption === 'الكل' ? 'النوع' : 'Type'} {txSortField === 'type' ? (txSortAsc ? '▲' : '▼') : ''}</span>
+                              </div>
+                              <div
+                                onMouseDown={(e) => handleMouseDownResize('type', e)}
+                                onClick={(e) => e.stopPropagation()}
+                                className="absolute right-0 top-0 bottom-0 w-1.5 cursor-col-resize hover:bg-emerald-500/50 transition-colors"
+                              />
+                            </th>
+                          )}
+                          {txVisibleColumns.includes('symbol') && (
+                            <th 
+                              style={{ width: columnWidths['symbol'] ? `${columnWidths['symbol']}px` : undefined, minWidth: '80px' }}
+                              className="relative py-3 px-4 cursor-pointer select-none hover:text-white transition group" 
+                              onClick={() => handleTxSort('symbol')}
+                            >
+                              <div className="flex items-center justify-between">
+                                <span>{t.tickerLabel} {txSortField === 'symbol' ? (txSortAsc ? '▲' : '▼') : ''}</span>
+                              </div>
+                              <div
+                                onMouseDown={(e) => handleMouseDownResize('symbol', e)}
+                                onClick={(e) => e.stopPropagation()}
+                                className="absolute right-0 top-0 bottom-0 w-1.5 cursor-col-resize hover:bg-emerald-500/50 transition-colors"
+                              />
+                            </th>
+                          )}
+                          {txVisibleColumns.includes('qty') && (
+                            <th 
+                              style={{ width: columnWidths['qty'] ? `${columnWidths['qty']}px` : undefined, minWidth: '80px' }}
+                              className="relative py-3 px-4 cursor-pointer select-none hover:text-white transition group" 
+                              onClick={() => handleTxSort('qty')}
+                            >
+                              <div className="flex items-center justify-between">
+                                <span>{t.qtyLabel} {txSortField === 'qty' ? (txSortAsc ? '▲' : '▼') : ''}</span>
+                              </div>
+                              <div
+                                onMouseDown={(e) => handleMouseDownResize('qty', e)}
+                                onClick={(e) => e.stopPropagation()}
+                                className="absolute right-0 top-0 bottom-0 w-1.5 cursor-col-resize hover:bg-emerald-500/50 transition-colors"
+                              />
+                            </th>
+                          )}
+                          {txVisibleColumns.includes('price') && (
+                            <th 
+                              style={{ width: columnWidths['price'] ? `${columnWidths['price']}px` : undefined, minWidth: '80px' }}
+                              className="relative py-3 px-4 cursor-pointer select-none hover:text-white transition group" 
+                              onClick={() => handleTxSort('price')}
+                            >
+                              <div className="flex items-center justify-between">
+                                <span>{t.priceLabel} {txSortField === 'price' ? (txSortAsc ? '▲' : '▼') : ''}</span>
+                              </div>
+                              <div
+                                onMouseDown={(e) => handleMouseDownResize('price', e)}
+                                onClick={(e) => e.stopPropagation()}
+                                className="absolute right-0 top-0 bottom-0 w-1.5 cursor-col-resize hover:bg-emerald-500/50 transition-colors"
+                              />
+                            </th>
+                          )}
+                          {txVisibleColumns.includes('total') && (
+                            <th 
+                              style={{ width: columnWidths['total'] ? `${columnWidths['total']}px` : undefined, minWidth: '80px' }}
+                              className="relative py-3 px-4 select-none text-slate-400 group"
+                            >
+                              <div className="flex items-center justify-between">
+                                <span>{t.allOption === 'Tutti' ? 'Totale' : 'Total'}</span>
+                              </div>
+                              <div
+                                onMouseDown={(e) => handleMouseDownResize('total', e)}
+                                onClick={(e) => e.stopPropagation()}
+                                className="absolute right-0 top-0 bottom-0 w-1.5 cursor-col-resize hover:bg-emerald-500/50 transition-colors"
+                              />
+                            </th>
+                          )}
+                          {txVisibleColumns.includes('currentValue') && (
+                            <th 
+                              style={{ width: columnWidths['currentValue'] ? `${columnWidths['currentValue']}px` : undefined, minWidth: '90px' }}
+                              className="relative py-3 px-4 cursor-pointer select-none hover:text-white transition group" 
+                              onClick={() => handleTxSort('latestPrice')}
+                            >
+                              <div className="flex items-center justify-between">
+                                <span>{t.allOption === 'Tutti' ? 'Valore Attuale' : t.allOption === 'Todos' ? 'Valor Actual' : t.allOption === 'Tous' ? 'Valeur Actuelle' : t.allOption === '全部' ? '最新价值' : t.allOption === 'الكل' ? 'القيمة الحالية' : 'Current Value'} {txSortField === 'latestPrice' ? (txSortAsc ? '▲' : '▼') : ''}</span>
+                              </div>
+                              <div
+                                onMouseDown={(e) => handleMouseDownResize('currentValue', e)}
+                                onClick={(e) => e.stopPropagation()}
+                                className="absolute right-0 top-0 bottom-0 w-1.5 cursor-col-resize hover:bg-emerald-500/50 transition-colors"
+                              />
+                            </th>
+                          )}
+                          {txVisibleColumns.includes('commission') && (
+                            <th 
+                              style={{ width: columnWidths['commission'] ? `${columnWidths['commission']}px` : undefined, minWidth: '80px' }}
+                              className="relative py-3 px-4 cursor-pointer select-none hover:text-white transition group" 
+                              onClick={() => handleTxSort('commission')}
+                            >
+                              <div className="flex items-center justify-between">
+                                <span>{t.commissionLabel} {txSortField === 'commission' ? (txSortAsc ? '▲' : '▼') : ''}</span>
+                              </div>
+                              <div
+                                onMouseDown={(e) => handleMouseDownResize('commission', e)}
+                                onClick={(e) => e.stopPropagation()}
+                                className="absolute right-0 top-0 bottom-0 w-1.5 cursor-col-resize hover:bg-emerald-500/50 transition-colors"
+                              />
+                            </th>
+                          )}
+                          {txVisibleColumns.includes('notes') && (
+                            <th 
+                              style={{ width: columnWidths['notes'] ? `${columnWidths['notes']}px` : undefined, minWidth: '100px' }}
+                              className="relative py-3 px-4 font-semibold text-slate-400 select-none group"
+                            >
+                              <div className="flex items-center justify-between">
+                                <span>{t.notesLabel}</span>
+                              </div>
+                              <div
+                                onMouseDown={(e) => handleMouseDownResize('notes', e)}
+                                onClick={(e) => e.stopPropagation()}
+                                className="absolute right-0 top-0 bottom-0 w-1.5 cursor-col-resize hover:bg-emerald-500/50 transition-colors"
+                              />
+                            </th>
+                          )}
+                          <th 
+                            style={{ width: columnWidths['actions'] ? `${columnWidths['actions']}px` : undefined, minWidth: '70px' }}
+                            className="py-3 px-4 text-slate-400 text-center select-none"
+                          >
+                            {t.allOption === 'Tutti' ? 'Azioni' : t.allOption === 'Todos' ? 'Acciones' : t.allOption === 'Tous' ? 'Actions' : t.allOption === '全部' ? '操作' : t.allOption === 'الكل' ? 'الإجراءات' : 'Actions'}
                           </th>
-                          <th className="py-3 px-4 cursor-pointer select-none hover:text-white transition" onClick={() => handleTxSort('portfolio')}>
-                            {t.allOption === 'Tutti' ? 'Portafoglio' : t.allOption === 'Todos' ? 'Cartera' : t.allOption === 'Tous' ? 'Portefeuille' : t.allOption === '全部' ? '投资组合' : t.allOption === 'الكل' ? 'المحفظة' : 'Portfolio'} {txSortField === 'portfolio' ? (txSortAsc ? '▲' : '▼') : ''}
-                          </th>
-                          <th className="py-3 px-4 cursor-pointer select-none hover:text-white transition" onClick={() => handleTxSort('type')}>
-                            {t.allOption === 'Tutti' ? 'Tipo' : t.allOption === 'Todos' ? 'Tipo' : t.allOption === 'Tous' ? 'Type' : t.allOption === '全部' ? '交易类型' : t.allOption === 'الكل' ? 'النوع' : 'Type'} {txSortField === 'type' ? (txSortAsc ? '▲' : '▼') : ''}
-                          </th>
-                          <th className="py-3 px-4 cursor-pointer select-none hover:text-white transition" onClick={() => handleTxSort('symbol')}>
-                            {t.tickerLabel} {txSortField === 'symbol' ? (txSortAsc ? '▲' : '▼') : ''}
-                          </th>
-                          <th className="py-3 px-4 cursor-pointer select-none hover:text-white transition" onClick={() => handleTxSort('qty')}>
-                            {t.qtyLabel} {txSortField === 'qty' ? (txSortAsc ? '▲' : '▼') : ''}
-                          </th>
-                          <th className="py-3 px-4 cursor-pointer select-none hover:text-white transition" onClick={() => handleTxSort('price')}>
-                            {t.priceLabel} {txSortField === 'price' ? (txSortAsc ? '▲' : '▼') : ''}
-                          </th>
-                          <th className="py-3 px-4 select-none text-slate-400">
-                            {t.allOption === 'Tutti' ? 'Totale' : 'Total'}
-                          </th>
-                          <th className="py-3 px-4 cursor-pointer select-none hover:text-white transition" onClick={() => handleTxSort('latestPrice')}>
-                            {t.allOption === 'Tutti' ? 'Valore Attuale' : t.allOption === 'Todos' ? 'Valor Actual' : t.allOption === 'Tous' ? 'Valeur Actuelle' : t.allOption === '全部' ? '最新价值' : t.allOption === 'الكل' ? 'القيمة الحالية' : 'Current Value'} {txSortField === 'latestPrice' ? (txSortAsc ? '▲' : '▼') : ''}
-                          </th>
-                          <th className="py-3 px-4 cursor-pointer select-none hover:text-white transition" onClick={() => handleTxSort('commission')}>
-                            {t.commissionLabel} {txSortField === 'commission' ? (txSortAsc ? '▲' : '▼') : ''}
-                          </th>
-                          <th className="py-3 px-4 font-semibold text-slate-400 select-none">{t.notesLabel}</th>
-                          <th className="py-3 px-4 text-slate-400 text-center select-none">{t.allOption === 'Tutti' ? 'Azioni' : t.allOption === 'Todos' ? 'Acciones' : t.allOption === 'Tous' ? 'Actions' : t.allOption === '全部' ? '操作' : t.allOption === 'الكل' ? 'الإجراءات' : 'Actions'}</th>
                         </tr>
                       </thead>
                       <tbody className="divide-y divide-slate-800/40">
@@ -3616,78 +4486,122 @@ export default function App() {
                           const port = db.portfolios.find(p => p.id === tx.portfolioId);
                           const isBuy = tx.type === TransactionType.BUY;
                           const latestPriceObj = getLatestPriceInfo(tx.symbol);
+                          const lotStatus = getLotStatus(tx);
                           return (
-                            <tr key={tx.id} className="hover:bg-slate-900/35 transition font-mono group">
-                              <td className="py-2.5 px-4 text-slate-400">{formatDateString(tx.date, lang, true)}</td>
-                              <td className="py-2.5 px-4 text-white font-bold">{port?.name || 'Incompleto'}</td>
-                              <td className="py-2.5 px-4">
-                                <span className={`px-2 py-0.5 rounded-lg font-black text-[9px] uppercase tracking-wider ${
-                                  isBuy ? 'bg-emerald-500/10 text-emerald-400 border border-emerald-500/20' : 'bg-rose-500/10 text-rose-400 border border-rose-500/20'
-                                }`}>
-                                  {tx.type}
-                                </span>
-                              </td>
-                              <td className="py-2.5 px-4 text-white font-black uppercase tracking-wider">{tx.symbol}</td>
-                              <td className="py-2.5 px-4 text-slate-300 font-bold">{tx.qty.toLocaleString()}</td>
-                              <td className="py-2.5 px-4 text-slate-300 font-bold">
-                                {formatCurrency(convertValue(tx.price, tx.currency || 'EUR', selectedCurrency, tx.date), selectedCurrency)}
-                                {tx.currency && tx.currency !== selectedCurrency && (
-                                  <span className="block text-[10px] text-slate-500 font-normal">Orig: {formatCurrency(tx.price, tx.currency)}</span>
-                                )}
-                              </td>
-                              <td className="py-2.5 px-4 text-slate-300 font-bold">
-                                {formatCurrency(convertValue(tx.price * tx.qty, tx.currency || 'EUR', selectedCurrency, tx.date), selectedCurrency)}
-                                {tx.currency && tx.currency !== selectedCurrency && (
-                                  <span className="block text-[10px] text-slate-500 font-normal">Orig: {formatCurrency(tx.price * tx.qty, tx.currency)}</span>
-                                )}
-                              </td>
-                              <td className="py-2.5 px-4">
-                                {latestPriceObj ? (
-                                  <div className="flex flex-col">
-                                    <span className="text-emerald-400 font-black">
-                                      {formatCurrency(convertValue(tx.qty * latestPriceObj.price, tx.currency || 'EUR', selectedCurrency, todayStr), selectedCurrency)}
+                            <tr 
+                              key={tx.id} 
+                              id={`tx-row-${tx.id}`}
+                              className={`transition duration-300 font-mono group ${txHighlightIds.includes(tx.id) ? 'bg-amber-500/20 border-y border-amber-500/40 scale-[1.01] shadow-[0_0_15px_rgba(245,158,11,0.15)] ring-1 ring-amber-500/30' : 'hover:bg-slate-900/35'}`}
+                            >
+                              {txVisibleColumns.includes('date') && (
+                                <td className="py-2.5 px-4 text-slate-400">{formatDateString(tx.date, lang, true)}</td>
+                              )}
+                              {txVisibleColumns.includes('portfolio') && (
+                                <td className="py-2.5 px-4 text-white font-bold">{port?.name || 'Incompleto'}</td>
+                              )}
+                              {txVisibleColumns.includes('type') && (
+                                <td className="py-2.5 px-4">
+                                  <div className="flex flex-col gap-1 items-start">
+                                    <span className={`px-2 py-0.5 rounded-lg font-black text-[9px] uppercase tracking-wider ${getTypeBadgeClass(tx.type)}`}>
+                                      {getTypeLabel(tx.type)}
                                     </span>
-                                    <span className="text-[9px] text-slate-400 font-bold">
-                                      Un: {formatCurrency(convertValue(latestPriceObj.price, tx.currency || 'EUR', selectedCurrency, todayStr), selectedCurrency)}
-                                    </span>
-                                    <span className="text-[8px] text-slate-500 whitespace-nowrap">{t.readOnLabel}: {formatDateString(latestPriceObj.date, lang)}</span>
+                                    {getTransferPeerInfo(tx) && (
+                                      <div className="flex items-center gap-1.5 flex-wrap">
+                                        <span className="text-[10px] text-amber-400 font-bold bg-amber-500/5 px-1.5 py-0.2 rounded border border-amber-500/10">
+                                          {getTransferPeerInfo(tx)}
+                                        </span>
+                                        <button
+                                          onClick={() => handleViewConnectedClick(tx)}
+                                          className="text-[9px] text-slate-500 hover:text-white underline cursor-pointer font-bold whitespace-nowrap transition-colors"
+                                          title={t.viewConnectedTx}
+                                        >
+                                          {t.viewConnectedTx}
+                                        </button>
+                                      </div>
+                                    )}
                                   </div>
-                                ) : (
-                                  <span className="text-slate-500 italic">No cache</span>
-                                )}
-                              </td>
-                              <td className="py-2.5 px-4">
-                                {tx.commission > 0 ? (
-                                  <div className="flex flex-col">
-                                    <span className="font-bold text-rose-400">
-                                      {formatCurrency(convertValue(tx.commission, tx.commissionCurrency || tx.currency || 'EUR', selectedCurrency, tx.date), selectedCurrency)}
-                                    </span>
-                                    {(tx.commissionCurrency || tx.currency) && (tx.commissionCurrency || tx.currency) !== selectedCurrency && (
-                                      <span className="text-[9px] text-slate-500 font-normal">
-                                        Orig: {formatCurrency(tx.commission, tx.commissionCurrency || tx.currency || 'EUR')}
+                                </td>
+                              )}
+                              {txVisibleColumns.includes('symbol') && (
+                                <td className="py-2.5 px-4 text-white font-black uppercase tracking-wider">
+                                  <div className="flex flex-col gap-1 items-start">
+                                    <span>{tx.symbol}</span>
+                                    {/* Lot status if applicable */}
+                                    {lotStatus && lotStatus.status === 'PARTIALLY_TRANSFERRED' && (
+                                      <span 
+                                        className="text-[8px] text-amber-400 font-bold bg-amber-500/10 px-1.5 py-0.5 rounded border border-amber-500/20 whitespace-nowrap cursor-help" 
+                                        title={t.lotDetailTooltip?.replace('{orig}', formatFullQuantity(tx.qty)).replace('{trans}', formatFullQuantity(lotStatus.depleted)).replace('{res}', formatFullQuantity(lotStatus.remaining))}
+                                      >
+                                        {t.lotBadgePartial}
+                                      </span>
+                                    )}
+                                    {lotStatus && lotStatus.status === 'FULLY_TRANSFERRED' && (
+                                      <span className="text-[8px] text-emerald-400 font-bold bg-emerald-500/10 px-1.5 py-0.5 rounded border border-emerald-500/20 whitespace-nowrap">
+                                        {t.lotBadgeFully}
                                       </span>
                                     )}
                                   </div>
-                                ) : '-'}
-                              </td>
-                              <td className="py-2.5 px-4 text-slate-400 select-all italic font-sans max-w-xs truncate">{tx.notes}</td>
+                                </td>
+                              )}
+                              {txVisibleColumns.includes('qty') && (
+                                <td className="py-2.5 px-4 text-slate-300 font-bold font-mono">{formatFullQuantity(tx.qty)}</td>
+                              )}
+                              {txVisibleColumns.includes('price') && (
+                                <td className="py-2.5 px-4 text-slate-300 font-bold">
+                                  {formatCurrency(convertValue(tx.price, tx.currency || 'EUR', selectedCurrency, tx.date), selectedCurrency)}
+                                  {tx.currency && tx.currency !== selectedCurrency && (
+                                    <span className="block text-[10px] text-slate-500 font-normal">Orig: {formatCurrency(tx.price, tx.currency)}</span>
+                                  )}
+                                </td>
+                              )}
+                              {txVisibleColumns.includes('total') && (
+                                <td className="py-2.5 px-4 text-slate-300 font-bold">
+                                  {formatCurrency(convertValue(tx.price * tx.qty, tx.currency || 'EUR', selectedCurrency, tx.date), selectedCurrency)}
+                                  {tx.currency && tx.currency !== selectedCurrency && (
+                                    <span className="block text-[10px] text-slate-500 font-normal">Orig: {formatCurrency(tx.price * tx.qty, tx.currency)}</span>
+                                  )}
+                                </td>
+                              )}
+                              {txVisibleColumns.includes('currentValue') && (
+                                <td className="py-2.5 px-4">
+                                  {latestPriceObj ? (
+                                    <div className="flex flex-col">
+                                      <span className="text-emerald-400 font-black">
+                                        {formatCurrency(convertValue(tx.qty * latestPriceObj.price, tx.currency || 'EUR', selectedCurrency, todayStr), selectedCurrency)}
+                                      </span>
+                                      <span className="text-[9px] text-slate-400 font-bold">
+                                        Un: {formatCurrency(convertValue(latestPriceObj.price, tx.currency || 'EUR', selectedCurrency, todayStr), selectedCurrency)}
+                                      </span>
+                                      <span className="text-[8px] text-slate-500 whitespace-nowrap">{t.readOnLabel}: {formatDateString(latestPriceObj.date, lang)}</span>
+                                    </div>
+                                  ) : (
+                                    <span className="text-slate-500 italic">No cache</span>
+                                  )}
+                                </td>
+                              )}
+                              {txVisibleColumns.includes('commission') && (
+                                <td className="py-2.5 px-4">
+                                  {tx.commission > 0 ? (
+                                    <div className="flex flex-col">
+                                      <span className="font-bold text-rose-400">
+                                        {formatCurrency(convertValue(tx.commission, tx.commissionCurrency || tx.currency || 'EUR', selectedCurrency, tx.date), selectedCurrency)}
+                                      </span>
+                                      {(tx.commissionCurrency || tx.currency) && (tx.commissionCurrency || tx.currency) !== selectedCurrency && (
+                                        <span className="text-[9px] text-slate-500 font-normal">
+                                          Orig: {formatCurrency(tx.commission, tx.commissionCurrency || tx.currency || 'EUR')}
+                                        </span>
+                                      )}
+                                    </div>
+                                  ) : '-'}
+                                </td>
+                              )}
+                              {txVisibleColumns.includes('notes') && (
+                                <td className="py-2.5 px-4 text-slate-400 select-all italic font-sans max-w-xs truncate">{tx.notes}</td>
+                              )}
                               <td className="py-2.5 px-4 text-center">
                                 <div className="flex items-center justify-center gap-1.5">
                                   <button
-                                    onClick={() => setTxForm({
-                                      open: true,
-                                      editId: tx.id,
-                                      portfolioId: tx.portfolioId,
-                                      date: tx.date.substring(0, 16),
-                                      type: tx.type,
-                                      symbol: tx.symbol,
-                                      qty: tx.qty,
-                                      price: tx.price,
-                                      commission: tx.commission,
-                                      currency: tx.currency || db.settings.defaultCurrency || 'EUR',
-                                      commissionCurrency: tx.commissionCurrency || tx.currency || db.settings.defaultCurrency || 'EUR',
-                                      notes: tx.notes || ''
-                                    })}
+                                    onClick={() => handleEditClick(tx)}
                                     className="text-slate-500 hover:text-emerald-400 p-1 rounded hover:bg-emerald-950/20 transition-colors duration-250 cursor-pointer"
                                     title="Modifica Transazione"
                                   >
@@ -3707,27 +4621,49 @@ export default function App() {
                         })}
                       </tbody>
                       <tfoot className="border-t border-slate-700 bg-slate-900/60 font-mono text-[10px] font-black uppercase tracking-wider">
-                        <tr>
-                          <td colSpan={4} className="py-3 px-4 text-right text-slate-400 tracking-widest">{t.allOption === 'Tutti' ? 'Totali' : 'Totals'}:</td>
-                          <td className="py-3 px-4 text-slate-300">
-                            {getProcessedTransactions().reduce((sum, tx) => sum + (tx.type === 'BUY' ? tx.qty : -tx.qty), 0).toLocaleString()}
-                          </td>
-                          <td className="py-3 px-4 text-white"></td>
-                          <td className="py-3 px-4 text-slate-300">
-                            {formatCurrency(
-                              getProcessedTransactions().reduce((sum, tx) => sum + ((tx.type === 'BUY' ? 1 : -1) * convertValue(tx.price * tx.qty, tx.currency || 'EUR', selectedCurrency, tx.date)), 0),
-                              selectedCurrency
-                            )}
-                          </td>
-                          <td className="py-3 px-4 text-white"></td>
-                          <td className="py-3 px-4 text-rose-400">
-                            {formatCurrency(
-                              getProcessedTransactions().reduce((sum, tx) => sum + convertValue(tx.commission || 0, tx.commissionCurrency || tx.currency || 'EUR', selectedCurrency, tx.date), 0),
-                              selectedCurrency
-                            )}
-                          </td>
-                          <td colSpan={2} className="py-3 px-4"></td>
-                        </tr>
+                        {(() => {
+                          const tableTotals = calculateTransactionTableTotals(
+                            getProcessedTransactions(),
+                            convertValue,
+                            selectedCurrency
+                          );
+                          return (
+                            <tr>
+                              <td colSpan={['date', 'portfolio', 'type', 'symbol'].filter(id => txVisibleColumns.includes(id)).length} className="py-3 px-4 text-right text-slate-400 tracking-widest">{t.totalsLabel}:</td>
+                              {txVisibleColumns.includes('qty') && (
+                                <td className="py-3 px-4 text-slate-300 font-bold font-mono">
+                                  {formatFullQuantity(tableTotals.totalQty)}
+                                </td>
+                              )}
+                              {txVisibleColumns.includes('price') && (
+                                <td className="py-3 px-4 text-white"></td>
+                              )}
+                              {txVisibleColumns.includes('total') && (
+                                <td className="py-3 px-4 text-slate-300">
+                                  {formatCurrency(
+                                    tableTotals.totalAmount,
+                                    selectedCurrency
+                                  )}
+                                </td>
+                              )}
+                              {txVisibleColumns.includes('currentValue') && (
+                                <td className="py-3 px-4 text-white"></td>
+                              )}
+                              {txVisibleColumns.includes('commission') && (
+                                <td className="py-3 px-4 text-rose-400">
+                                  {formatCurrency(
+                                    tableTotals.totalCommissions,
+                                    selectedCurrency
+                                  )}
+                                </td>
+                              )}
+                              {txVisibleColumns.includes('notes') && (
+                                <td className="py-3 px-4 text-white"></td>
+                              )}
+                              <td className="py-3 px-4"></td>
+                            </tr>
+                          );
+                        })()}
                       </tfoot>
                     </table>
                   </div>
@@ -3738,22 +4674,61 @@ export default function App() {
                       const port = db.portfolios.find(p => p.id === tx.portfolioId);
                       const isBuy = tx.type === TransactionType.BUY;
                       const latestPriceObj = getLatestPriceInfo(tx.symbol);
+                      const lotStatus = getLotStatus(tx);
                       return (
-                        <div key={tx.id} className="bg-slate-900/40 border border-slate-800/80 p-4 rounded-xl space-y-3">
+                        <div 
+                          key={tx.id} 
+                          id={`tx-card-${tx.id}`}
+                          className={`border p-4 rounded-xl space-y-3 transition duration-300 ${txHighlightIds.includes(tx.id) ? 'bg-amber-500/20 border-amber-500/50 shadow-[0_0_15px_rgba(245,158,11,0.2)] scale-[1.01] ring-1 ring-amber-500/30' : 'bg-slate-900/40 border-slate-800/80'}`}
+                        >
                           <div className="flex justify-between items-start border-b border-slate-800/60 pb-3">
                             <div>
-                              <div className="flex items-center gap-2 mb-1">
-                                <span className={`px-2 py-0.5 rounded-lg font-black text-[9px] uppercase tracking-wider ${
-                                  isBuy ? 'bg-emerald-500/10 text-emerald-400 border border-emerald-500/20' : 'bg-rose-500/10 text-rose-400 border border-rose-500/20'
-                                }`}>
-                                  {tx.type}
-                                </span>
-                                <span className="text-white font-black uppercase tracking-wider">{tx.symbol}</span>
+                              <div className="flex flex-col gap-1 items-start mb-1.5">
+                                <div className="flex items-center gap-2">
+                                  {txVisibleColumns.includes('type') && (
+                                    <span className={`px-2 py-0.5 rounded-lg font-black text-[9px] uppercase tracking-wider ${getTypeBadgeClass(tx.type)}`}>
+                                      {getTypeLabel(tx.type)}
+                                    </span>
+                                  )}
+                                  {txVisibleColumns.includes('symbol') && (
+                                    <span className="text-white font-black uppercase tracking-wider">{tx.symbol}</span>
+                                  )}
+                                </div>
+                                {getTransferPeerInfo(tx) && (
+                                  <div className="flex items-center gap-1.5 flex-wrap">
+                                    <span className="text-[10px] text-amber-400 font-bold bg-amber-500/5 px-1.5 py-0.2 rounded border border-amber-500/10">
+                                      {getTransferPeerInfo(tx)}
+                                    </span>
+                                    <button
+                                      onClick={() => handleViewConnectedClick(tx)}
+                                      className="text-[9px] text-slate-500 hover:text-white underline cursor-pointer font-bold transition-colors"
+                                      title={t.viewConnectedTx}
+                                    >
+                                      {t.viewConnectedTx}
+                                    </button>
+                                  </div>
+                                )}
+                                {/* Lot status if applicable */}
+                                {lotStatus && lotStatus.status === 'PARTIALLY_TRANSFERRED' && (
+                                  <span 
+                                    className="text-[8px] text-amber-400 font-bold bg-amber-500/10 px-1.5 py-0.5 rounded border border-amber-500/20 whitespace-nowrap cursor-help" 
+                                    title={t.lotDetailTooltip?.replace('{orig}', formatFullQuantity(tx.qty)).replace('{trans}', formatFullQuantity(lotStatus.depleted)).replace('{res}', formatFullQuantity(lotStatus.remaining))}
+                                  >
+                                    {t.lotBadgePartial}
+                                  </span>
+                                )}
+                                {lotStatus && lotStatus.status === 'FULLY_TRANSFERRED' && (
+                                  <span className="text-[8px] text-emerald-400 font-bold bg-emerald-500/10 px-1.5 py-0.5 rounded border border-amber-500/20 whitespace-nowrap">
+                                    {t.lotBadgeFully}
+                                  </span>
+                                )}
                               </div>
-                              <div className="text-xs text-slate-400">{formatDateString(tx.date, lang, true)}</div>
+                              {txVisibleColumns.includes('date') && (
+                                <div className="text-xs text-slate-400">{formatDateString(tx.date, lang, true)}</div>
+                              )}
                             </div>
                             <div className="flex gap-2">
-                              <button onClick={() => { setTxForm({ open: true, editId: tx.id, portfolioId: tx.portfolioId, date: tx.date.substring(0, 16), type: tx.type, symbol: tx.symbol, qty: tx.qty, price: tx.price, currency: tx.currency || db.settings.defaultCurrency || 'EUR', commission: tx.commission, notes: tx.notes || '' }); window.scrollTo({ top: 0, behavior: 'smooth' }); }} className="p-1.5 bg-slate-800 text-slate-300 rounded hover:bg-emerald-600 hover:text-white transition">
+                              <button onClick={() => { handleEditClick(tx); }} className="p-1.5 bg-slate-800 text-slate-300 rounded hover:bg-emerald-600 hover:text-white transition">
                                 <Edit className="w-3.5 h-3.5" />
                               </button>
                               <button onClick={() => requestDeleteTransaction(tx.id)} className="p-1.5 bg-slate-800 text-slate-300 rounded hover:bg-rose-600 hover:text-white transition">
@@ -3762,23 +4737,31 @@ export default function App() {
                             </div>
                           </div>
                           <div className="grid grid-cols-2 gap-y-2 gap-x-4 text-xs">
-                            <div>
-                              <span className="block text-[10px] text-slate-500 uppercase tracking-widest">{t.allOption === 'Tutti' ? 'Portafoglio' : t.allOption === 'Todos' ? 'Cartera' : t.allOption === 'Tous' ? 'Portefeuille' : t.allOption === '全部' ? '投资组合' : t.allOption === 'الكل' ? 'المحفظة' : 'Portfolio'}</span>
-                              <span className="text-white font-bold">{port?.name || (t.allOption === 'Tutti' ? 'Incompleto' : 'Incomplete')}</span>
-                            </div>
-                            <div>
-                              <span className="block text-[10px] text-slate-500 uppercase tracking-widest">{t.qtyLabel}</span>
-                              <span className="text-slate-300 font-bold">{tx.qty.toLocaleString()}</span>
-                            </div>
-                            <div>
-                              <span className="block text-[10px] text-slate-500 uppercase tracking-widest">{t.priceLabel}</span>
-                              <span className="text-slate-300 font-bold">{formatCurrency(convertValue(tx.price, tx.currency || 'EUR', selectedCurrency, tx.date), selectedCurrency)}</span>
-                            </div>
-                            <div>
-                              <span className="block text-[10px] text-slate-500 uppercase tracking-widest">{t.allOption === 'Tutti' ? 'Totale' : 'Total'}</span>
-                              <span className="text-slate-300 font-bold">{formatCurrency(convertValue(tx.price * tx.qty, tx.currency || 'EUR', selectedCurrency, tx.date), selectedCurrency)}</span>
-                            </div>
-                            {latestPriceObj && (
+                            {txVisibleColumns.includes('portfolio') && (
+                              <div>
+                                <span className="block text-[10px] text-slate-500 uppercase tracking-widest">{t.allOption === 'Tutti' ? 'Portafoglio' : t.allOption === 'Todos' ? 'Cartera' : t.allOption === 'Tous' ? 'Portefeuille' : t.allOption === '全部' ? '投资组合' : t.allOption === 'الكل' ? 'المحفظة' : 'Portfolio'}</span>
+                                <span className="text-white font-bold">{port?.name || (t.allOption === 'Tutti' ? 'Incompleto' : 'Incomplete')}</span>
+                              </div>
+                            )}
+                            {txVisibleColumns.includes('qty') && (
+                              <div>
+                                <span className="block text-[10px] text-slate-500 uppercase tracking-widest">{t.qtyLabel}</span>
+                                <span className="text-slate-300 font-bold font-mono">{formatFullQuantity(tx.qty)}</span>
+                              </div>
+                            )}
+                            {txVisibleColumns.includes('price') && (
+                              <div>
+                                <span className="block text-[10px] text-slate-500 uppercase tracking-widest">{t.priceLabel}</span>
+                                <span className="text-slate-300 font-bold">{formatCurrency(convertValue(tx.price, tx.currency || 'EUR', selectedCurrency, tx.date), selectedCurrency)}</span>
+                              </div>
+                            )}
+                            {txVisibleColumns.includes('total') && (
+                              <div>
+                                <span className="block text-[10px] text-slate-500 uppercase tracking-widest">{t.allOption === 'Tutti' ? 'Totale' : 'Total'}</span>
+                                <span className="text-slate-300 font-bold">{formatCurrency(convertValue(tx.price * tx.qty, tx.currency || 'EUR', selectedCurrency, tx.date), selectedCurrency)}</span>
+                              </div>
+                            )}
+                            {txVisibleColumns.includes('currentValue') && latestPriceObj && (
                               <div className="col-span-2 pt-2 mt-1 border-t border-slate-800/40 flex items-center justify-between">
                                 <div>
                                   <span className="block text-[10px] text-slate-500 uppercase tracking-widest">{t.allOption === 'Tutti' ? 'Valore Attuale' : t.allOption === 'Todos' ? 'Valor Actual' : t.allOption === 'Tous' ? 'Valeur Actuelle' : t.allOption === '全部' ? '最新价值' : t.allOption === 'الكل' ? 'القيمة الحالية' : 'Current Value'}</span>
@@ -3787,13 +4770,13 @@ export default function App() {
                                 <span className="text-[9px] text-slate-400">({formatCurrency(latestPriceObj.price, tx.currency || 'EUR')})</span>
                               </div>
                             )}
-                            {tx.commission > 0 && (
+                            {txVisibleColumns.includes('commission') && tx.commission > 0 && (
                               <div className="col-span-2 pt-1 border-t border-slate-800/40 flex items-center justify-between">
                                 <span className="block text-[10px] text-slate-500 uppercase tracking-widest">{t.commissionLabel}</span>
                                 <span className="text-rose-400 font-mono">{formatCurrency(convertValue(tx.commission, tx.currency || 'EUR', selectedCurrency, tx.date), selectedCurrency)}</span>
                               </div>
                             )}
-                            {tx.notes && (
+                            {txVisibleColumns.includes('notes') && tx.notes && (
                               <div className="col-span-2 pt-1 mt-1 border-t border-slate-800/40 text-[10px] text-slate-500 italic">
                                 {tx.notes}
                               </div>
@@ -3802,6 +4785,49 @@ export default function App() {
                         </div>
                       );
                     })}
+
+                    {/* Mobile Totals Footer Card */}
+                    {getProcessedTransactions().length > 0 && (
+                      <div className="p-4 bg-slate-900/90 border border-slate-800 rounded-xl space-y-2.5 shadow-lg text-xs font-mono">
+                        <div className="flex items-center justify-between border-b border-slate-800 pb-2">
+                          <span className="font-extrabold text-white uppercase tracking-wider flex items-center gap-1.5 font-sans">
+                            <span className="text-emerald-400 font-mono">Σ</span> {t.allOption === 'Tutti' ? 'TOTALI' : 'TOTALS'}
+                          </span>
+                          <span className="text-[10px] text-slate-500 font-mono">
+                            {getProcessedTransactions().length} {t.allOption === 'Tutti' ? 'registrazioni' : 'records'}
+                          </span>
+                        </div>
+                        {(() => {
+                          const tableTotals = calculateTransactionTableTotals(
+                            getProcessedTransactions(),
+                            convertValue,
+                            selectedCurrency
+                          );
+                          return (
+                            <div className="grid grid-cols-2 gap-2 text-slate-300 pt-1">
+                              {txVisibleColumns.includes('qty') && (
+                                <div>
+                                  <span className="block text-[10px] text-slate-500 uppercase tracking-widest font-sans font-bold">{t.qtyLabel}</span>
+                                  <span className="font-bold text-white font-mono text-sm">{formatFullQuantity(tableTotals.totalQty)}</span>
+                                </div>
+                              )}
+                              {txVisibleColumns.includes('total') && (
+                                <div>
+                                  <span className="block text-[10px] text-slate-500 uppercase tracking-widest font-sans font-bold">{t.allOption === 'Tutti' ? 'Importo Totale' : 'Total Amount'}</span>
+                                  <span className="font-bold text-emerald-400 font-mono text-sm">{formatCurrency(tableTotals.totalAmount, selectedCurrency)}</span>
+                                </div>
+                              )}
+                              {txVisibleColumns.includes('commission') && (
+                                <div className="col-span-2 pt-1 border-t border-slate-800/40 flex justify-between items-center">
+                                  <span className="text-[10px] text-slate-500 uppercase tracking-widest font-sans font-bold">{t.commissionLabel}</span>
+                                  <span className="font-bold text-rose-400 font-mono text-sm">{formatCurrency(tableTotals.totalCommissions, selectedCurrency)}</span>
+                                </div>
+                              )}
+                            </div>
+                          );
+                        })()}
+                      </div>
+                    )}
                   </div>
                   </>
                 )}
@@ -4137,7 +5163,7 @@ export default function App() {
 
       {/* Footer footer */}
       <footer className="border-t border-slate-800/60 bg-[#070c17]/60 backdrop-blur-md py-6 text-xs text-slate-500 font-mono mt-auto relative">
-        <div className="max-w-7xl mx-auto px-4 md:px-6 flex flex-col md:flex-row items-center justify-between gap-4">
+        <div className="mx-auto px-4 md:px-6 flex flex-col md:flex-row items-center justify-between gap-4">
           <div className="text-center md:text-left">
             <p className="font-sans text-slate-400 font-semibold">&copy; {new Date().getFullYear()} {t.appName} &bull; Self-hosted Private Portfolio Manager &bull; v1.0.0</p>
             <p className="text-[10px] text-slate-500 font-mono mt-1">Powered by <a href="https://www.garzia.it/" target="_blank" className="hover:text-emerald-400 underline transition duration-300">Francesco Garzia</a></p>

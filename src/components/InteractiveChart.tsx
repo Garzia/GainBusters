@@ -3,11 +3,12 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import React, { useState } from 'react';
-import { LanguagePhrases, Currency } from '../types.ts';
+import React, { useState, useMemo } from 'react';
+import { LanguagePhrases, Currency, Transaction } from '../types.ts';
 import { LineChart, Calendar, RefreshCw, BarChart2, CheckCircle2, AlertTriangle, Activity, TrendingUp, TrendingDown, Percent } from 'lucide-react';
 import { TickerInput } from './TickerInput.tsx';
 import { formatDateString } from '../utils.ts';
+import { calculatePortfolioPerformance } from '../utils/finance.ts';
 
 export interface DailyBalance {
   date: string; // YYYY-MM-DD
@@ -36,11 +37,15 @@ interface InteractiveChartProps {
   onSelectTicker?: (sym: string) => void;
   activeTxSorted?: any[];
   activeOtherCosts?: any[];
+  allTransactions?: Transaction[];
+  activePortIds?: string[];
+  targetSymbol?: string | null;
   convertValue?: (val: number, from: string, to: string, date: string) => number;
   selectedCurrency?: string;
   inflationIndices?: any[];
   selectedInflationId?: string;
   onSelectInflationId?: (id: string) => void;
+  positionsTableNode?: React.ReactNode;
 }
 
 export default function InteractiveChart({
@@ -61,11 +66,15 @@ export default function InteractiveChart({
   onSelectTicker,
   activeTxSorted = [],
   activeOtherCosts = [],
+  allTransactions = [],
+  activePortIds = [],
+  targetSymbol = null,
   convertValue,
   selectedCurrency,
   inflationIndices = [],
   selectedInflationId = '',
-  onSelectInflationId
+  onSelectInflationId,
+  positionsTableNode
 }: InteractiveChartProps) {
   const [timeframe, setTimeframe] = useState<string>('ALL');
   const [customStartDate, setCustomStartDate] = useState<string>('');
@@ -239,184 +248,67 @@ export default function InteractiveChart({
   const chartHeight = 280;
   const chartWidth = 700;
 
-  // Find transactions that fall within the selected period's start and end dates
-  const periodTransactions = activeTxSorted.filter(tx => {
-    if (renderBalances.length === 0) return false;
+  // Compute centralized, mathematically exact performance metrics for the selected period
+  const periodPerf = useMemo(() => {
+    if (renderBalances.length === 0) {
+      return {
+        twrrPercentage: 0,
+        twrrAnnualized: 0,
+        mwrrAnnualized: 0,
+        mwrrPeriod: 0,
+        volatility: 0,
+        maxDrawdown: 0,
+        periodInitialValue: 0,
+        periodFinalValue: 0,
+        periodInvested: 0,
+        periodSells: 0,
+        periodNetContributions: 0,
+        periodCommissions: 0,
+        periodNetGain: 0,
+        totalDays: 0
+      };
+    }
+
     const firstDateStr = renderBalances[0].date;
     const lastDateStr = renderBalances[renderBalances.length - 1].date;
-    const txDateStr = tx.date.split('T')[0];
-    return txDateStr >= firstDateStr && txDateStr <= lastDateStr;
-  });
 
-  const firstRenderDate = renderBalances.length > 0 ? renderBalances[0].date : '';
-  const firstIndexInDaily = dailyBalances.findIndex(b => b.date === firstRenderDate);
-  const periodInitialValue = firstIndexInDaily > 0 ? dailyBalances[firstIndexInDaily - 1].currentValue : 0;
-  const periodFinalValue = renderBalances.length > 0 ? renderBalances[renderBalances.length - 1].currentValue : 0;
+    return calculatePortfolioPerformance(
+      dailyBalances,
+      allTransactions && allTransactions.length > 0 ? allTransactions : activeTxSorted,
+      activePortIds && activePortIds.length > 0
+        ? activePortIds
+        : Array.from(new Set((allTransactions || activeTxSorted).map(t => t.portfolioId))),
+      activeOtherCosts,
+      includeCommissions,
+      selectedCurrency || 'EUR',
+      convertValue || ((val) => val),
+      firstDateStr,
+      lastDateStr,
+      targetSymbol
+    );
+  }, [
+    dailyBalances,
+    renderBalances,
+    allTransactions,
+    activeTxSorted,
+    activePortIds,
+    activeOtherCosts,
+    includeCommissions,
+    selectedCurrency,
+    convertValue,
+    targetSymbol
+  ]);
 
-  const periodInvested = periodTransactions
-    .filter(tx => tx.type === 'BUY')
-    .reduce((sum, tx) => sum + (tx.qty * tx.price), 0);
+  const periodInitialValue = periodPerf.periodInitialValue;
+  const periodFinalValue = periodPerf.periodFinalValue;
+  const periodInvested = periodPerf.periodInvested;
+  const periodCommissions = periodPerf.periodCommissions;
+  const periodNetGain = periodPerf.periodNetGain;
+  const periodMaxDrawdown = periodPerf.maxDrawdown;
+  const periodVolatility = periodPerf.volatility;
+  const periodTWRR = periodPerf.twrrPercentage;
+  const periodMWRR = timeframe === 'ALL' || periodPerf.totalDays >= 365 ? periodPerf.mwrrAnnualized : periodPerf.mwrrPeriod;
 
-  const periodTxCommissions = periodTransactions
-    .reduce((sum, tx) => {
-      const commVal = tx.commission || 0;
-      if (convertValue && selectedCurrency) {
-        return sum + convertValue(commVal, tx.commissionCurrency || tx.currency || 'EUR', selectedCurrency, tx.date);
-      }
-      return sum + commVal;
-    }, 0);
-
-  const periodOtherCostsSum = (activeOtherCosts || [])
-    .filter(c => {
-      if (renderBalances.length === 0) return false;
-      const firstDateStr = renderBalances[0].date;
-      const lastDateStr = renderBalances[renderBalances.length - 1].date;
-      const costDateStr = c.date.split('T')[0];
-      return costDateStr >= firstDateStr && costDateStr <= lastDateStr;
-    })
-    .reduce((sum, c) => {
-      const amt = c.amount || 0;
-      if (convertValue && selectedCurrency) {
-        return sum + convertValue(amt, c.currency || 'EUR', selectedCurrency, c.date);
-      }
-      return sum + amt;
-    }, 0);
-
-  const periodCommissions = periodTxCommissions + periodOtherCostsSum;
-
-  const periodSells = periodTransactions
-    .filter(tx => tx.type === 'SELL')
-    .reduce((sum, tx) => sum + (tx.qty * tx.price), 0);
-  
-  const netContributions = periodInvested - periodSells;
-  const periodNetGain = periodFinalValue - periodInitialValue - netContributions;
-
-  // Maximum Drawdown del Periodo
-  const getPeriodDrawdown = () => {
-    if (renderBalances.length === 0) return 0;
-    let peak = -Infinity;
-    let maxDD = 0;
-    renderBalances.forEach(b => {
-      if (b.currentValue > peak) {
-        peak = b.currentValue;
-      }
-      const dd = peak > 0 ? (peak - b.currentValue) / peak : 0;
-      if (dd > maxDD) {
-        maxDD = dd;
-      }
-    });
-    return maxDD * 100;
-  };
-  const periodMaxDrawdown = getPeriodDrawdown();
-
-  // Volatilità del Periodo
-  const getPeriodVolatility = () => {
-    if (renderBalances.length < 3) return 0;
-    const dailyReturns: number[] = [];
-    for (let i = 1; i < renderBalances.length; i++) {
-      const prev = renderBalances[i-1].currentValue;
-      const curr = renderBalances[i].currentValue;
-      if (prev > 0) {
-        dailyReturns.push((curr - prev) / prev);
-      }
-    }
-    if (dailyReturns.length < 2) return 0;
-    const mean = dailyReturns.reduce((sum, r) => sum + r, 0) / dailyReturns.length;
-    const variance = dailyReturns.reduce((sum, r) => sum + Math.pow(r - mean, 2), 0) / (dailyReturns.length - 1);
-    const dailyStdDev = Math.sqrt(variance);
-    // Annualize std dev
-    return dailyStdDev * Math.sqrt(252) * 100;
-  };
-  const periodVolatility = getPeriodVolatility();
-
-  // MWRR del Periodo (IRR)
-  const getPeriodMWRR = (): number => {
-    if (renderBalances.length < 2 || periodTransactions.length === 0 || periodFinalValue <= 0) return 0;
-    
-    const solverFlows: { years: number; amount: number }[] = [];
-    const firstDate = new Date(renderBalances[0].date);
-    const lastDate = new Date(renderBalances[renderBalances.length - 1].date);
-    const lastMillis = lastDate.getTime();
-
-    solverFlows.push({
-      years: (lastMillis - firstDate.getTime()) / (1000 * 60 * 60 * 24 * 365),
-      amount: -periodInitialValue
-    });
-
-    periodTransactions.forEach((tx) => {
-      const txDate = new Date(tx.date);
-      const yearsAgo = (lastMillis - txDate.getTime()) / (1000 * 60 * 60 * 24 * 365);
-      
-      const cfAmount = tx.type === 'BUY'
-        ? -(tx.qty * tx.price + (includeCommissions ? tx.commission : 0))
-        : (tx.qty * tx.price - (includeCommissions ? tx.commission : 0));
-
-      solverFlows.push({ years: yearsAgo, amount: cfAmount });
-    });
-
-    const f = (r: number) => {
-      let sum = periodFinalValue;
-      for (const flow of solverFlows) {
-        sum += flow.amount * Math.pow(1 + r, flow.years);
-      }
-      return sum;
-    };
-
-    let low = -0.99;
-    let high = 2.5;
-    let f_low = f(low);
-    let f_high = f(high);
-
-    if (f_low * f_high > 0) {
-      high = 6.0;
-      f_high = f(high);
-    }
-
-    if (f_low * f_high > 0) {
-      const divider = periodInitialValue + netContributions;
-      return divider > 0 ? ((periodFinalValue - divider) / divider) * 100 : 0;
-    }
-
-    let mid = 0;
-    for (let i = 0; i < 40; i++) {
-      mid = (low + high) / 2;
-      const f_mid = f(mid);
-      if (Math.abs(f_mid) < 0.0001) break;
-      if (f_low * f_mid < 0) {
-        high = mid;
-        f_high = f_mid;
-      } else {
-        low = mid;
-        f_low = f_mid;
-      }
-    }
-    return mid * 100;
-  };
-  const periodMWRR = getPeriodMWRR();
-
-  // TWRR del Periodo
-  const getPeriodTWRR = (): number => {
-    if (renderBalances.length < 2) return 0;
-    let productTerm = 1;
-    for (let i = 1; i < renderBalances.length; i++) {
-      const prev = renderBalances[i - 1].currentValue;
-      const curr = renderBalances[i].currentValue;
-      
-      const prevInv = renderBalances[i - 1].investedNominal;
-      const currInv = renderBalances[i].investedNominal;
-      const contribution = currInv - prevInv;
-
-      const denominator = prev + (contribution > 0 ? contribution : 0);
-      const numerator = curr - (contribution < 0 ? contribution : 0);
-      
-      if (denominator > 0) {
-        const dailyReturn = (numerator - denominator) / denominator;
-        productTerm *= (1 + dailyReturn);
-      }
-    }
-    return (productTerm - 1) * 100;
-  };
-  const periodTWRR = getPeriodTWRR();
 
   // Render SVG chart path helper
   const getSvgCoordinates = (attribute: 'currentValue' | 'invested' | 'benchNormalized' | 'realValueAdjusted') => {
@@ -479,9 +371,7 @@ export default function InteractiveChart({
             </div>
             {renderBalances.length > 0 && (
               <span className="text-xs text-slate-400 font-mono">
-                {lang === 'it'
-                  ? `Periodo analizzato: ${getPeriodDaysLabel()} (${formatDateString(renderBalances[0].date, lang)} - ${formatDateString(renderBalances[renderBalances.length - 1].date, lang)})`
-                  : `Analyzed period: ${getPeriodDaysLabel()} (${formatDateString(renderBalances[0].date, lang)} - ${formatDateString(renderBalances[renderBalances.length - 1].date, lang)})`}
+                {`${t.analyzedPeriod}: ${getPeriodDaysLabel()} (${formatDateString(renderBalances[0].date, lang)} - ${formatDateString(renderBalances[renderBalances.length - 1].date, lang)})`}
               </span>
             )}
           </div>
@@ -980,6 +870,8 @@ export default function InteractiveChart({
           </div>
         </div>
       </div>
+
+      {positionsTableNode}
 
       {/* Tickers breakdown and weight rebalancing */}
       <div className="bg-slate-900/50 p-6 rounded-2xl border border-slate-800 space-y-4">

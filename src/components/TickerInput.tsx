@@ -166,3 +166,5 @@ export const TickerInput: React.FC<TickerInputProps> = ({
     </div>
   );
 };
+
+export default TickerInput;

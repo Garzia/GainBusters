@@ -376,7 +376,7 @@ export const InflationPage: React.FC<InflationPageProps> = ({
                 <span>{t.momPercentageNotice}</span>
               </div>
 
-              <div className="grid sm:grid-cols-2 gap-3 max-h-[380px] overflow-y-auto pr-1">
+              <div className="grid sm:grid-cols-2 gap-3 overflow-y-auto pr-1">
                 {monthsList.map((m) => {
                   const matchVal = (activeIndex.values || []).find(v => v.year === activeYearFilter && v.month === m.num);
                   const displayRate = matchVal ? (matchVal.rate * 100).toFixed(4).replace(/\.?0+$/, '') : '';

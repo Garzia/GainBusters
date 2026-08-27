@@ -144,7 +144,7 @@ export default function OtherCostsPage({
   };
 
   return (
-    <div className="space-y-8 animate-fade-in text-slate-100" dir={lang === 'ar' ? 'rtl' : 'ltr'}>
+    <div className="space-y-8 animate-fade-in text-slate-100 dark:text-slate-100" dir={lang === 'ar' ? 'rtl' : 'ltr'}>
       {/* Title & Top Action Bar */}
       <div className="flex flex-wrap items-center justify-between gap-4 border-b border-slate-800 pb-4">
         <div>
@@ -153,9 +153,7 @@ export default function OtherCostsPage({
             {t.otherCostsTab}
           </h1>
           <p className="text-sm text-slate-400 mt-1">
-            {lang === 'it' 
-              ? 'Gestisci tasse, imposte di bollo e spese di custodia del dossier titoli.' 
-              : 'Manage stamp duties, custody fees, and custom brokerage taxes.'}
+            {t.otherCostsDesc}
           </p>
         </div>
         
@@ -171,7 +169,7 @@ export default function OtherCostsPage({
 
       {/* Aggregate Totals Widget */}
       <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
-        <div className="bg-[#0b1329]/60 border border-slate-800/80 rounded-2xl p-6 relative overflow-hidden flex flex-col justify-between">
+        <div className="bg-slate-900/60 border border-slate-800/80 rounded-2xl p-6 relative overflow-hidden flex flex-col justify-between">
           <div className="absolute top-0 right-0 w-24 h-24 bg-emerald-500/5 rounded-full blur-2xl pointer-events-none"></div>
           <div>
             <span className="text-[10px] text-slate-400 font-mono tracking-widest uppercase font-bold">
@@ -183,20 +181,18 @@ export default function OtherCostsPage({
           </div>
           <div className="text-[11px] text-slate-500 mt-4 flex items-center gap-1">
             <Info className="w-3.5 h-3.5" />
-            {lang === 'it'
-              ? 'Calcolato sul perimetro dei portafogli attivi selezionati.'
-              : 'Aggregated based on active portfolios.'}
+            {t.otherCostsCalcNote}
           </div>
         </div>
 
         {/* Breakdown counters */}
-        <div className="col-span-1 md:col-span-2 bg-[#0b1329]/40 border border-slate-800/40 rounded-2xl p-6 grid grid-cols-2 lg:grid-cols-4 gap-4">
+        <div className="col-span-1 md:col-span-2 bg-slate-900/40 border border-slate-800/40 rounded-2xl p-6 grid grid-cols-2 lg:grid-cols-4 gap-4">
           {(['bollo', 'custody', 'tax', 'other'] as const).map((type) => {
             const sumForType = displayedCosts
               .filter(c => c.type === type)
               .reduce((sum, c) => sum + convertValue(c.amount || 0, c.currency || 'EUR', selectedCurrency, c.date), 0);
             return (
-              <div key={type} className="bg-[#0d162d]/50 border border-slate-800/40 rounded-xl p-3 flex flex-col justify-between">
+              <div key={type} className="bg-slate-950/60 border border-slate-800/40 rounded-xl p-3 flex flex-col justify-between">
                 <span className="text-[9px] text-slate-400 font-semibold tracking-wider uppercase truncate">
                   {getTranslatedTypeName(type)}
                 </span>
@@ -211,7 +207,7 @@ export default function OtherCostsPage({
 
       {/* Inline Form Card if open */}
       {costForm.open && (
-        <div className="bg-[#0d1527] border border-emerald-500/20 rounded-2xl p-6 shadow-2xl relative overflow-hidden animate-slide-in">
+        <div className="bg-slate-900 border border-emerald-500/20 rounded-2xl p-6 shadow-2xl relative overflow-hidden animate-slide-in">
           <div className="absolute top-0 right-0 w-32 h-32 bg-emerald-500/5 rounded-full blur-2xl pointer-events-none"></div>
           
           <div className="flex justify-between items-center mb-5 border-b border-slate-800 pb-3">
@@ -234,7 +230,7 @@ export default function OtherCostsPage({
               <select
                 value={costForm.portfolioId}
                 onChange={(e) => setCostForm({ ...costForm, portfolioId: e.target.value })}
-                className="bg-[#070b16] border border-slate-800 rounded-xl px-3 py-2.5 text-xs text-white focus:outline-none focus:border-emerald-500/50 transition font-medium"
+                className="bg-slate-950 border border-slate-800 rounded-xl px-3 py-2.5 text-xs text-white focus:outline-none focus:border-emerald-500/50 transition font-medium"
               >
                 {activePortfolios.map((p) => {
                   const acc = db.accounts.find(a => a.id === p.accountId);
@@ -253,7 +249,7 @@ export default function OtherCostsPage({
               <select
                 value={costForm.type}
                 onChange={(e) => setCostForm({ ...costForm, type: e.target.value as any })}
-                className="bg-[#070b16] border border-slate-800 rounded-xl px-3 py-2.5 text-xs text-white focus:outline-none focus:border-emerald-500/50 transition font-medium"
+                className="bg-slate-950 border border-slate-800 rounded-xl px-3 py-2.5 text-xs text-white focus:outline-none focus:border-emerald-500/50 transition font-medium"
               >
                 <option value="bollo">{t.stampDuty}</option>
                 <option value="custody">{t.custodyFee}</option>
@@ -269,7 +265,7 @@ export default function OtherCostsPage({
                 type="datetime-local"
                 value={costForm.date}
                 onChange={(e) => setCostForm({ ...costForm, date: e.target.value })}
-                className="bg-[#070b16] border border-slate-800 rounded-xl px-3 py-2.5 text-xs text-white focus:outline-none focus:border-emerald-500/50 transition font-medium"
+                className="bg-slate-950 border border-slate-800 rounded-xl px-3 py-2.5 text-xs text-white focus:outline-none focus:border-emerald-500/50 transition font-medium"
               />
             </div>
 
@@ -282,7 +278,7 @@ export default function OtherCostsPage({
                   step="any"
                   value={costForm.amount || ''}
                   onChange={(e) => setCostForm({ ...costForm, amount: Number(e.target.value) })}
-                  className="bg-[#070b16] border border-slate-800 rounded-xl px-3 py-2.5 text-xs text-white w-full focus:outline-none focus:border-emerald-500/50 transition font-medium"
+                  className="bg-slate-950 border border-slate-800 rounded-xl px-3 py-2.5 text-xs text-white w-full focus:outline-none focus:border-emerald-500/50 transition font-medium"
                   placeholder="0.00"
                 />
               </div>
@@ -290,11 +286,11 @@ export default function OtherCostsPage({
 
             {/* Currency Selection */}
             <div className="flex flex-col">
-              <label className="text-[10px] text-slate-400 uppercase tracking-widest font-bold mb-1.5">Currency</label>
+              <label className="text-[10px] text-slate-400 uppercase tracking-widest font-bold mb-1.5">{t.currencyLabel}</label>
               <select
                 value={costForm.currency}
                 onChange={(e) => setCostForm({ ...costForm, currency: e.target.value })}
-                className="bg-[#070b16] border border-slate-800 rounded-xl px-3 py-2.5 text-xs text-white focus:outline-none focus:border-emerald-500/50 transition font-medium"
+                className="bg-slate-950 border border-slate-800 rounded-xl px-3 py-2.5 text-xs text-white focus:outline-none focus:border-emerald-500/50 transition font-medium"
               >
                 {['EUR', 'USD', 'GBP', 'CHF', 'JPY', 'CNY'].map((cur) => (
                   <option key={cur} value={cur}>{cur}</option>
@@ -309,8 +305,8 @@ export default function OtherCostsPage({
                 type="text"
                 value={costForm.notes}
                 onChange={(e) => setCostForm({ ...costForm, notes: e.target.value })}
-                className="bg-[#070b16] border border-slate-800 rounded-xl px-3 py-2.5 text-xs text-white focus:outline-none focus:border-emerald-500/50 transition font-medium"
-                placeholder={lang === 'it' ? 'Esempio: Bollo Dossier Titoli Q2' : 'Example: Q2 Custody fee'}
+                className="bg-slate-950 border border-slate-800 rounded-xl px-3 py-2.5 text-xs text-white focus:outline-none focus:border-emerald-500/50 transition font-medium"
+                placeholder={t.notesPlaceholder}
               />
             </div>
           </div>
@@ -328,14 +324,14 @@ export default function OtherCostsPage({
               onClick={saveCostMutation}
               className="px-5 py-2.5 text-xs font-black text-white bg-emerald-600 hover:bg-emerald-500 active:bg-emerald-700 rounded-xl transition cursor-pointer shadow-lg shadow-emerald-950/20"
             >
-              Save
+              {t.save}
             </button>
           </div>
         </div>
       )}
 
       {/* Listing and Table Filters */}
-      <div className="bg-[#0b1329]/40 border border-slate-800/60 rounded-2xl p-5 space-y-4">
+      <div className="bg-slate-900/40 border border-slate-800/60 rounded-2xl p-5 space-y-4">
         <div className="flex flex-wrap items-center justify-between gap-4">
           <h3 className="text-sm font-black text-white uppercase tracking-wider flex items-center gap-1.5">
             <FileText className="w-4 h-4 text-emerald-400" />
@@ -344,7 +340,7 @@ export default function OtherCostsPage({
 
           {/* Quick Stats count */}
           <span className="text-xs font-mono text-slate-400">
-            {displayedCosts.length} {lang === 'it' ? 'registrazioni trovate' : 'records found'}
+            {displayedCosts.length} {t.recordsFound}
           </span>
         </div>
 
@@ -358,9 +354,9 @@ export default function OtherCostsPage({
             <select
               value={filterPortfolioId}
               onChange={(e) => setFilterPortfolioId(e.target.value)}
-              className="bg-[#070b16] border border-slate-800 rounded-xl px-3 py-2 text-xs text-white focus:outline-none focus:border-emerald-500/30 transition"
+              className="bg-slate-950 border border-slate-800 rounded-xl px-3 py-2 text-xs text-white focus:outline-none focus:border-emerald-500/30 transition"
             >
-              <option value="">{lang === 'it' ? 'Tutti i portafogli' : 'All portfolios'}</option>
+              <option value="">{t.allPortfolios}</option>
               {activePortfolios.map((p) => {
                 const acc = db.accounts.find(a => a.id === p.accountId);
                 return (
@@ -380,9 +376,9 @@ export default function OtherCostsPage({
             <select
               value={filterType}
               onChange={(e) => setFilterType(e.target.value)}
-              className="bg-[#070b16] border border-slate-800 rounded-xl px-3 py-2 text-xs text-white focus:outline-none focus:border-emerald-500/30 transition"
+              className="bg-slate-950 border border-slate-800 rounded-xl px-3 py-2 text-xs text-white focus:outline-none focus:border-emerald-500/30 transition"
             >
-              <option value="">{lang === 'it' ? 'Tutti i tipi' : 'All types'}</option>
+              <option value="">{t.allTypes}</option>
               <option value="bollo">{t.stampDuty}</option>
               <option value="custody">{t.custodyFee}</option>
               <option value="tax">{t.otherTax}</option>
@@ -399,8 +395,8 @@ export default function OtherCostsPage({
               type="text"
               value={searchNotes}
               onChange={(e) => setSearchNotes(e.target.value)}
-              className="bg-[#070b16] border border-slate-800 rounded-xl px-3 py-2 text-xs text-white placeholder-slate-600 focus:outline-none focus:border-emerald-500/30 transition"
-              placeholder={lang === 'it' ? 'Cerca nelle note...' : 'Search notes...'}
+              className="bg-slate-950 border border-slate-800 rounded-xl px-3 py-2 text-xs text-white placeholder-slate-600 focus:outline-none focus:border-emerald-500/30 transition"
+              placeholder={t.searchNotesPlaceholder}
             />
           </div>
         </div>
@@ -420,7 +416,7 @@ export default function OtherCostsPage({
               return (
                 <div
                   key={c.id}
-                  className="bg-[#0b1329]/50 border border-slate-800/40 hover:border-slate-800 hover:bg-[#0b1329]/70 rounded-xl p-4 transition duration-200 flex flex-wrap items-center justify-between gap-4"
+                  className="bg-slate-900/50 border border-slate-800/40 hover:border-slate-800 hover:bg-slate-900/70 rounded-xl p-4 transition duration-200 flex flex-wrap items-center justify-between gap-4"
                 >
                   <div className="flex items-center gap-3">
                     <span className="p-2.5 bg-slate-800/50 border border-slate-700/30 rounded-lg text-emerald-400">
@@ -465,14 +461,14 @@ export default function OtherCostsPage({
                       <button
                         onClick={() => openEditForm(c)}
                         className="p-2 bg-slate-800 hover:bg-emerald-600 hover:text-white rounded-lg text-slate-400 transition cursor-pointer"
-                        title="Edit"
+                        title={t.editCostBtn}
                       >
                         <Edit className="w-3.5 h-3.5" />
                       </button>
                       <button
                         onClick={() => requestDeleteCost(c.id)}
                         className="p-2 bg-slate-800 hover:bg-rose-600 hover:text-white rounded-lg text-slate-400 transition cursor-pointer"
-                        title="Delete"
+                        title={t.confirmDeleteCost}
                       >
                         <Trash2 className="w-3.5 h-3.5" />
                       </button>

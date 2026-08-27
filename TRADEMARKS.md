@@ -36,4 +36,4 @@ If you fork or modify the GainBusters codebase to run your own custom instance o
 2. You must give your project a distinct, unique name that does not include "GainBusters".
 3. You must retain copyright notices and license attributions in the source files as required by AGPLv3.
 
-For trademark inquiries or commercial licensing permissions, contact: `francesco.garzia@gmail.com`
+For trademark inquiries or commercial licensing permissions, contact: `info@garzia.it`

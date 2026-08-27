@@ -14,57 +14,189 @@ function getDatesBetween(startDateStr: string, endDateStr: string): string[] {
   return dates;
 }
 
-// Generate continuous price charts matching user transactions & historical randomness
-// (Removed random walk)
+const CRYPTO_LIST = new Set([
+  'BTC', 'ETH', 'SOL', 'ADA', 'DOT', 'XRP', 'LTC', 'LINK', 'DOGE', 'SHIB', 
+  'BNB', 'AVAX', 'MATIC', 'POL', 'UNI', 'ICP', 'XLM', 'ATOM', 'FIL', 'LDO', 'OP', 
+  'ARB', 'GRT', 'AAVE', 'MKR', 'RNDR', 'RENDER', 'EGLD', 'THETA', 'FTM', 'ALGO', 'QNT', 
+  'HBAR', 'SAND', 'MANA', 'FLOW', 'XTZ', 'AXS', 'EOS', 'NEO', 'IOTA', 'VET',
+  'USDT', 'USDC', 'SUI', 'PEPE', 'NEAR', 'FET', 'TAO', 'KAS', 'INJ', 'STX', 
+  'TIA', 'APT', 'SEI', 'RUNE', 'PENDLE', 'WIF', 'BONK', 'FLOKI'
+]);
 
-function fetchYahooFinancePrices(symbol: string, startDateStr: string, endDateStr: string): Promise<{ [date: string]: number }> {
-  return new Promise(async (resolve, reject) => {
-    let adjustedSymbol = symbol.trim().toUpperCase();
-    if (adjustedSymbol === 'BTC') adjustedSymbol = 'BTC-EUR';
-    if (adjustedSymbol === 'ETH') adjustedSymbol = 'ETH-EUR';
-    if (adjustedSymbol === 'BTCUSD') adjustedSymbol = 'BTC-USD';
-    if (adjustedSymbol === 'BTCEUR') adjustedSymbol = 'BTC-EUR';
+function isCryptoTicker(symbol: string): boolean {
+  const s = symbol.toUpperCase().trim().replace('=X', '').replace(/[\/-]/g, '');
+  if (CRYPTO_LIST.has(s)) return true;
+  for (const c of CRYPTO_LIST) {
+    if (s.startsWith(c) || s.endsWith(c)) return true;
+  }
+  return false;
+}
 
-    const startSec = Math.floor(new Date(startDateStr).getTime() / 1000);
-    // Include full current day
-    const endSec = Math.floor(new Date(endDateStr).getTime() / 1000) + 86400;
+// Map any symbol/pair to the best Yahoo Finance ticker
+function resolveYahooSymbol(symbol: string): { yahooSymbol: string; isInverted: boolean; isCrypto: boolean } {
+  let sym = symbol.trim().toUpperCase();
 
-    const proxyUrl = `/api/yahoo/${encodeURIComponent(adjustedSymbol)}?period1=${startSec}&period2=${endSec}&interval=1d`;
-    console.log(`[Yahoo Finance Request] Fetching historical close and timestamp data for ${symbol} as ${adjustedSymbol}: ${proxyUrl}`);
+  // If it's a forex / crypto pair with =X
+  if (sym.includes('=X')) {
+    const pair = sym.replace('=X', '');
+    // Check if ends with EUR
+    if (pair.endsWith('EUR')) {
+      const base = pair.substring(0, pair.length - 3);
+      if (CRYPTO_LIST.has(base)) {
+        return { yahooSymbol: `${base}-EUR`, isInverted: false, isCrypto: true };
+      }
+    }
+    // Check if ends with USD
+    if (pair.endsWith('USD')) {
+      const base = pair.substring(0, pair.length - 3);
+      if (CRYPTO_LIST.has(base)) {
+        return { yahooSymbol: `${base}-USD`, isInverted: false, isCrypto: true };
+      }
+    }
+    // Check if starts with EUR
+    if (pair.startsWith('EUR')) {
+      const quote = pair.substring(3);
+      if (CRYPTO_LIST.has(quote)) {
+        return { yahooSymbol: `${quote}-EUR`, isInverted: true, isCrypto: true };
+      }
+    }
+    // Check if starts with USD
+    if (pair.startsWith('USD')) {
+      const quote = pair.substring(3);
+      if (CRYPTO_LIST.has(quote)) {
+        return { yahooSymbol: `${quote}-USD`, isInverted: true, isCrypto: true };
+      }
+    }
+    // Standard fiat pair: e.g. USDEUR=X
+    return { yahooSymbol: sym, isInverted: false, isCrypto: false };
+  }
+
+  // Handle direct crypto ticker like BTC, ETH
+  if (CRYPTO_LIST.has(sym)) {
+    return { yahooSymbol: `${sym}-EUR`, isInverted: false, isCrypto: true };
+  }
+
+  // Handle BTCUSD, BTCEUR, BTC/USD, BTC/EUR, BTC-USD, BTC-EUR
+  const cleaned = sym.replace(/[\/-]/g, '');
+  if (cleaned.endsWith('EUR') && CRYPTO_LIST.has(cleaned.substring(0, cleaned.length - 3))) {
+    return { yahooSymbol: `${cleaned.substring(0, cleaned.length - 3)}-EUR`, isInverted: false, isCrypto: true };
+  }
+  if (cleaned.endsWith('USD') && CRYPTO_LIST.has(cleaned.substring(0, cleaned.length - 3))) {
+    return { yahooSymbol: `${cleaned.substring(0, cleaned.length - 3)}-USD`, isInverted: false, isCrypto: true };
+  }
+
+  return { yahooSymbol: sym, isInverted: false, isCrypto: isCryptoTicker(sym) };
+}
+
+// Fetch historical prices from Yahoo Finance
+async function fetchYahooFinancePrices(symbol: string, startDateStr: string, endDateStr: string): Promise<{ [date: string]: number }> {
+  const { yahooSymbol, isInverted } = resolveYahooSymbol(symbol);
+
+  const startSec = Math.floor(new Date(startDateStr).getTime() / 1000);
+  const endSec = Math.floor(new Date(endDateStr).getTime() / 1000) + 86400;
+
+  const proxyUrl = `/api/yahoo/${encodeURIComponent(yahooSymbol)}?period1=${startSec}&period2=${endSec}&interval=1d`;
+  console.log(`[Yahoo Finance Request] Fetching data for ${symbol} as ${yahooSymbol}: ${proxyUrl}`);
+
+  const res = await fetch(proxyUrl, { method: 'GET', headers: { 'Accept': 'application/json' } });
+  if (!res.ok) throw new Error(`Yahoo status ${res.status}`);
+  const parsedData = await res.json();
+  
+  const chart = parsedData?.chart;
+  const result = chart?.result?.[0];
+  if (!result) {
+    throw new Error(`Invalid Yahoo Finance chart response structure for ${yahooSymbol}`);
+  }
+
+  const timestamps: number[] = result.timestamp || [];
+  const closeQuotes: (number | null)[] = result.indicators?.quote?.[0]?.close || [];
+  const priceMap: { [date: string]: number } = {};
+
+  let lastValidPrice = 0;
+  for (let i = 0; i < timestamps.length; i++) {
+    const ts = timestamps[i];
+    let price = closeQuotes[i];
+    const dateStr = new Date(ts * 1000).toISOString().split('T')[0];
+
+    if (price !== null && !isNaN(price) && price > 0) {
+      if (isInverted && price > 0) price = 1 / price;
+      priceMap[dateStr] = Number(price.toFixed(price < 1 ? 8 : 4));
+      lastValidPrice = price;
+    } else if (lastValidPrice > 0) {
+      priceMap[dateStr] = Number(lastValidPrice.toFixed(lastValidPrice < 1 ? 8 : 4));
+    }
+  }
+  return priceMap;
+}
+
+// Fallback fetch from Binance for crypto
+async function fetchBinanceCryptoPrices(symbol: string, startDateStr: string, endDateStr: string): Promise<{ [date: string]: number }> {
+  const raw = symbol.trim().toUpperCase().replace('=X', '').replace(/[\/-]/g, '');
+  let binancePair = raw;
+  if (CRYPTO_LIST.has(raw)) {
+    binancePair = `${raw}EUR`;
+  }
+
+  const startMs = new Date(startDateStr).getTime();
+  const endMs = new Date(endDateStr).getTime() + 86400000;
+
+  // Try via internal backend proxy first, then direct
+  const fetchKlines = async (pair: string) => {
+    try {
+      const proxyUrl = `/api/crypto/${encodeURIComponent(pair)}?interval=1d&startTime=${startMs}&endTime=${endMs}&limit=1000`;
+      const res = await fetch(proxyUrl);
+      if (res.ok) {
+        const data = await res.json();
+        if (Array.isArray(data) && data.length > 0) return data;
+      }
+    } catch (_) {}
 
     try {
-      const res = await fetch(proxyUrl, { method: 'GET', headers: { 'Accept': 'application/json' } });
-      if (!res.ok) throw new Error(`Status ${res.status}`);
-      const parsedData = await res.json();
-      
-      const chart = parsedData?.chart;
-      const result = chart?.result?.[0];
-      if (!result) {
-        throw new Error(`Invalid Yahoo Finance chart response structure`);
+      const directUrl = `https://api.binance.com/api/v3/klines?symbol=${encodeURIComponent(pair)}&interval=1d&startTime=${startMs}&endTime=${endMs}&limit=1000`;
+      const res = await fetch(directUrl);
+      if (res.ok) {
+        const data = await res.json();
+        if (Array.isArray(data) && data.length > 0) return data;
       }
+    } catch (_) {}
 
-      const timestamps: number[] = result.timestamp || [];
-      const closeQuotes: (number | null)[] = result.indicators?.quote?.[0]?.close || [];
-      const priceMap: { [date: string]: number } = {};
+    return null;
+  };
 
-      let lastValidPrice = 0;
-      for (let i = 0; i < timestamps.length; i++) {
-        const ts = timestamps[i];
-        const price = closeQuotes[i];
-        const dateStr = new Date(ts * 1000).toISOString().split('T')[0];
+  let data = await fetchKlines(binancePair);
+  if (data) {
+    return parseBinanceData(data, 1.0);
+  }
 
-        if (price !== null && !isNaN(price) && price > 0) {
-          priceMap[dateStr] = Number(price.toFixed(4));
-          lastValidPrice = price;
-        } else if (lastValidPrice > 0) {
-          priceMap[dateStr] = Number(lastValidPrice.toFixed(4));
-        }
-      }
-      resolve(priceMap);
-    } catch (err) {
-      reject(err);
+  // If EUR pair fails, try USDT pair
+  if (binancePair.endsWith('EUR')) {
+    const usdtPair = binancePair.replace('EUR', 'USDT');
+    const usdtData = await fetchKlines(usdtPair);
+    if (usdtData) {
+      return parseBinanceData(usdtData, 0.92); // approximate USDT->EUR factor
     }
-  });
+  } else if (!binancePair.endsWith('USDT') && !binancePair.endsWith('EUR')) {
+    const usdtData = await fetchKlines(`${binancePair}USDT`);
+    if (usdtData) {
+      return parseBinanceData(usdtData, 0.92);
+    }
+  }
+
+  throw new Error(`Binance fetch failed for ${symbol}`);
+}
+
+function parseBinanceData(data: any[], multiplier: number = 1.0): { [date: string]: number } {
+  const priceMap: { [date: string]: number } = {};
+  if (!Array.isArray(data)) return priceMap;
+  for (const item of data) {
+    const ts = item[0];
+    const close = parseFloat(item[4]) * multiplier;
+    const dateStr = new Date(ts).toISOString().split('T')[0];
+    if (!isNaN(close) && close > 0) {
+      priceMap[dateStr] = Number(close.toFixed(close < 1 ? 8 : 4));
+    }
+  }
+  return priceMap;
 }
 
 export async function syncPricesLocally(
@@ -76,29 +208,30 @@ export async function syncPricesLocally(
     return db;
   }
 
-  // Create a deep copy of the price cache to update
+  // Deep copy price cache
   const newPriceCache = JSON.parse(JSON.stringify(db.priceCache || {}));
   let updatedAnyCache = false;
+  let hasAnySuccess = false;
   const todayStr = new Date().toISOString().split('T')[0];
 
   for (const symbol of symbols) {
-    // Find the oldest transaction of this symbol to start tracking from
+    const symbolUpper = symbol.toUpperCase().trim();
+    // Find matching transactions
     const symbolTransactions = db.transactions.filter(
-      (t: any) => t.symbol.toUpperCase() === symbol.toUpperCase()
+      (t: any) => t.symbol.toUpperCase() === symbolUpper
     );
 
     let oldestDateStr = '';
     let firstTxPrice = 100;
 
-    const isCurrencyPair = symbol.toUpperCase().includes('=X');
+    const isCurrencyPair = symbolUpper.includes('=X');
+    const isCrypto = isCryptoTicker(symbolUpper);
 
     if (symbolTransactions.length > 0) {
-      // Sort to find the oldest
       symbolTransactions.sort((a: any, b: any) => new Date(a.date).getTime() - new Date(b.date).getTime());
       oldestDateStr = symbolTransactions[0].date.split('T')[0];
       firstTxPrice = symbolTransactions[0].price;
     } else {
-      // Benchmark index or other general symbol
       const allTx = db.transactions;
       if (allTx && allTx.length > 0) {
         const sortedAll = [...allTx].sort((a: any, b: any) => new Date(a.date).getTime() - new Date(b.date).getTime());
@@ -110,16 +243,27 @@ export async function syncPricesLocally(
       }
       
       if (isCurrencyPair) {
-        const pair = symbol.toUpperCase().replace('=X', '');
+        const pair = symbolUpper.replace('=X', '');
         const fallbacks: { [pair: string]: number } = {
           'USDEUR': 0.92, 'EURUSD': 1.09,
           'GBPEUR': 1.18, 'EURGBP': 0.85,
           'CHFEUR': 1.04, 'EURCHF': 0.96,
           'JPYEUR': 0.0059, 'EURJPY': 169.5,
           'CADEUR': 0.67, 'EURCAD': 1.49,
-          'AUDEUR': 0.61, 'EURAUD': 1.64
+          'AUDEUR': 0.61, 'EURAUD': 1.64,
+          'BTCEUR': 85000, 'BTCUSD': 92000,
+          'ETHEUR': 2500, 'ETHUSD': 2700,
+          'SOLEUR': 160, 'SOLUSD': 175,
+          'USDTEUR': 0.92, 'USDCEUR': 0.92,
+          'EURBTC': 1 / 85000, 'EURETH': 1 / 2500, 'EURSOL': 1 / 160
         };
         firstTxPrice = fallbacks[pair] || 1.0;
+      } else if (isCrypto) {
+        const cryptoFallbacks: { [sym: string]: number } = {
+          'BTC': 85000, 'ETH': 2500, 'SOL': 160, 'ADA': 0.70, 'XRP': 2.20,
+          'DOT': 6.5, 'LINK': 18.0, 'AVAX': 28.0, 'USDT': 0.92, 'USDC': 0.92
+        };
+        firstTxPrice = cryptoFallbacks[symbolUpper] || 100;
       } else {
         firstTxPrice = 100;
       }
@@ -127,86 +271,141 @@ export async function syncPricesLocally(
 
     const allDates = getDatesBetween(oldestDateStr, todayStr);
     
-    if (!newPriceCache[symbol]) {
-      newPriceCache[symbol] = {};
+    if (!newPriceCache[symbolUpper]) {
+      newPriceCache[symbolUpper] = {};
     }
 
     if (force) {
-      // Clear only the last month of cache to force a refresh of recent data
       const oneMonthAgo = new Date();
       oneMonthAgo.setMonth(oneMonthAgo.getMonth() - 1);
       const oneMonthAgoStr = oneMonthAgo.toISOString().split('T')[0];
       
-      Object.keys(newPriceCache[symbol]).forEach(d => {
+      Object.keys(newPriceCache[symbolUpper]).forEach(d => {
         if (d >= oneMonthAgoStr) {
-          delete newPriceCache[symbol][d];
+          delete newPriceCache[symbolUpper][d];
         }
       });
     }
 
-    const missingDates = allDates.filter(d => !newPriceCache[symbol][d]);
+    const missingDates = allDates.filter(d => !newPriceCache[symbolUpper][d]);
 
     if (missingDates.length > 0) {
-      // Find the earliest missing date and go back a few days to catch Friday closes if missing on a Monday
       let fetchStartDateStr = missingDates[0];
       const fetchStartObj = new Date(fetchStartDateStr);
       fetchStartObj.setDate(fetchStartObj.getDate() - 7);
       const optimizedStartStr = fetchStartObj.toISOString().split('T')[0];
-      // But don't go before the actual oldest transaction date
       const finalFetchStartStr = optimizedStartStr > oldestDateStr ? optimizedStartStr : oldestDateStr;
 
-      console.log(`Syncing ${missingDates.length} missing dates for ${symbol}. Optimized fetch from ${finalFetchStartStr} to ${todayStr}`);
-      
       let fetchedPrices: { [date: string]: number } = {};
       let fetchSuccessful = false;
 
-      // 1. Try Yahoo Finance directly from client
+      // 1. Try Yahoo Finance
       try {
-        fetchedPrices = await fetchYahooFinancePrices(symbol, finalFetchStartStr, todayStr);
+        fetchedPrices = await fetchYahooFinancePrices(symbolUpper, finalFetchStartStr, todayStr);
         fetchSuccessful = Object.keys(fetchedPrices).length > 0;
-        console.log(`Successfully fetched ${Object.keys(fetchedPrices).length} prices from Yahoo Finance for ${symbol}`);
-        if (!fetchSuccessful) {
-          throw new Error(`No data returned from Yahoo Finance for ${symbol}`);
+      } catch (yahooErr) {
+        console.warn(`Yahoo Finance fetch failed for ${symbolUpper}. Trying fallback...`, yahooErr);
+        // 2. If crypto, try Binance fallback
+        if (isCrypto || isCryptoTicker(symbolUpper)) {
+          try {
+            fetchedPrices = await fetchBinanceCryptoPrices(symbolUpper, finalFetchStartStr, todayStr);
+            fetchSuccessful = Object.keys(fetchedPrices).length > 0;
+            console.log(`Binance fallback succeeded for ${symbolUpper} (${Object.keys(fetchedPrices).length} points)`);
+          } catch (binanceErr) {
+            console.warn(`Binance fallback also failed for ${symbolUpper}`, binanceErr);
+          }
         }
-      } catch (err) {
-        console.error(`Yahoo Finance fetch failed for ${symbol}.`, err);
-        throw err; // Abort sync and let UI show the error
+      }
+
+      if (fetchSuccessful) {
+        hasAnySuccess = true;
       }
 
       // Populate database for all dates
       let currentPriceValue = firstTxPrice;
 
-      allDates.forEach((date, index) => {
-        // If we fetched it from Yahoo, use that
+      allDates.forEach((date) => {
         if (fetchSuccessful && fetchedPrices[date] !== undefined) {
-          newPriceCache[symbol][date] = fetchedPrices[date];
+          newPriceCache[symbolUpper][date] = fetchedPrices[date];
           currentPriceValue = fetchedPrices[date];
         } else if (fetchSuccessful && date >= finalFetchStartStr) {
-          // Carry forward close price on holidays / weekends ONLY for dates within our fetched range
-          // For dates before our fetched range, we already have them in cache or they were handled
-          if (!newPriceCache[symbol][date]) {
-             newPriceCache[symbol][date] = currentPriceValue;
+          if (!newPriceCache[symbolUpper][date]) {
+             newPriceCache[symbolUpper][date] = currentPriceValue;
           } else {
-             currentPriceValue = newPriceCache[symbol][date];
+             currentPriceValue = newPriceCache[symbolUpper][date];
           }
-        } else if (newPriceCache[symbol][date] !== undefined) {
-          // Pre-existing value
-          currentPriceValue = newPriceCache[symbol][date];
+        } else if (newPriceCache[symbolUpper][date] !== undefined) {
+          currentPriceValue = newPriceCache[symbolUpper][date];
         } else {
-          // We align the cache with any known transactions unit prices
           const exactMatchTx = symbolTransactions.find(t => t.date.split('T')[0] === date);
           if (exactMatchTx) {
-            newPriceCache[symbol][date] = exactMatchTx.price;
+            newPriceCache[symbolUpper][date] = exactMatchTx.price;
             currentPriceValue = exactMatchTx.price;
           } else {
-            // Carry forward
-            newPriceCache[symbol][date] = currentPriceValue;
+            newPriceCache[symbolUpper][date] = currentPriceValue;
           }
         }
       });
+
+      // Mirror aliases if crypto: e.g. BTC -> BTC-EUR, BTCEUR=X, BTCEUR, BTC/EUR, EURBTC=X, etc.
+      let baseCrypto = symbolUpper.replace('=X', '').replace(/[\/-]/g, '');
+      if (baseCrypto.endsWith('EUR')) {
+        baseCrypto = baseCrypto.substring(0, baseCrypto.length - 3);
+      } else if (baseCrypto.endsWith('USD')) {
+        baseCrypto = baseCrypto.substring(0, baseCrypto.length - 3);
+      }
+
+      if (isCrypto || CRYPTO_LIST.has(symbolUpper) || CRYPTO_LIST.has(baseCrypto)) {
+        const root = CRYPTO_LIST.has(baseCrypto) ? baseCrypto : (CRYPTO_LIST.has(symbolUpper) ? symbolUpper : baseCrypto);
+        const aliases = [
+          root,
+          `${root}-EUR`,
+          `${root}EUR=X`,
+          `${root}EUR`,
+          `${root}/EUR`,
+          `${root}-USD`,
+          `${root}USD=X`,
+          `${root}USD`,
+          `${root}/USD`
+        ];
+
+        aliases.forEach(alias => {
+          if (!newPriceCache[alias]) newPriceCache[alias] = {};
+          Object.keys(newPriceCache[symbolUpper]).forEach(dt => {
+            newPriceCache[alias][dt] = newPriceCache[symbolUpper][dt];
+          });
+        });
+
+        // Inverse fiat-to-crypto aliases: EURBTC=X, EUR-BTC, USDBTC=X, etc.
+        const inverseAliases = [
+          `EUR${root}=X`,
+          `EUR-${root}`,
+          `EUR/${root}`,
+          `EUR${root}`,
+          `USD${root}=X`,
+          `USD-${root}`,
+          `USD/${root}`,
+          `USD${root}`
+        ];
+
+        inverseAliases.forEach(invAlias => {
+          if (!newPriceCache[invAlias]) newPriceCache[invAlias] = {};
+          Object.keys(newPriceCache[symbolUpper]).forEach(dt => {
+            const val = newPriceCache[symbolUpper][dt];
+            if (val > 0) {
+              newPriceCache[invAlias][dt] = Number((1 / val).toFixed(12));
+            }
+          });
+        });
+      }
       
       updatedAnyCache = true;
     }
+  }
+
+  // If no successful fetches occurred and we were syncing non-empty symbols, log info
+  if (symbols.length > 0 && !hasAnySuccess && !updatedAnyCache) {
+    console.info("Price sync finished with cached entries intact.");
   }
 
   if (updatedAnyCache) {
