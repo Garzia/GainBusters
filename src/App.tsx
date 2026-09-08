@@ -7,7 +7,7 @@ import React, { useState, useEffect, useRef, useMemo, useCallback } from 'react'
 import { translations } from './locales/index.ts';
 import { Currency, DBState, Account, Portfolio, Transaction, TransactionType, Transfer } from './types.ts';
 import { encryptData, decryptData } from './utils/crypto.ts';
-import { saveFileHandleInIndexedDB, getFileHandleFromIndexedDB, clearFileHandleFromIndexedDB } from './utils/indexedDB.ts';
+import { saveFileHandleInIndexedDB, getFileHandleFromIndexedDB, clearFileHandleFromIndexedDB, getDatabaseStateFromIndexedDB } from './utils/indexedDB.ts';
 import { storageService } from './services/storageService.ts';
 import { syncPricesLocally, isCryptoTicker } from './utils/syncPrices.ts';
 import MissionPage from './components/MissionPage.tsx';
@@ -61,6 +61,7 @@ import {
   ChevronDown,
   Scale,
   ShieldAlert,
+  ShieldCheck,
   Download,
   Upload,
   Database,
@@ -686,10 +687,11 @@ export default function App() {
           setPasswordSet(true);
           setIsAuthenticated(false);
         } else {
+          const idbSnap = await getDatabaseStateFromIndexedDB();
+          const hasEncryptedIdb = !!(idbSnap && idbSnap.mode === 'browser' && idbSnap.encrypted);
           const hasFallbackEnc = !!localStorage.getItem('gainbusters_db_encrypted');
-          const hasFallbackPlain = !!localStorage.getItem('gainbusters_db');
           setHasPersistedHandle(false);
-          setPasswordSet(hasFallbackEnc || hasFallbackPlain);
+          setPasswordSet(hasEncryptedIdb || hasFallbackEnc);
           setIsAuthenticated(false);
         }
       } catch (err) {
@@ -700,13 +702,14 @@ export default function App() {
       }
     } else {
       try {
+        const savedToken = sessionStorage.getItem('gainbusters_local_token');
+        if (savedToken) {
+          storageService.setLocalAuthToken(savedToken);
+        }
         const r = await fetch('/api/auth/status', { method: 'POST' });
         const data = await r.json();
-        setPasswordSet(data.passwordSet);
-        if (!data.passwordSet) {
-          // If password is not set, allow into system so they can register
-          setIsAuthenticated(false);
-        }
+        setPasswordSet(!!data.passwordSet);
+        setIsAuthenticated(false);
       } catch (err) {
         console.error('Error checking auth', err);
       }
@@ -740,6 +743,9 @@ export default function App() {
       
       const handle = await (window as any).showSaveFilePicker(options);
       
+      // Purge any residual storage/caches first
+      await storageService.purgeStorageCache();
+
       // Encrypt default initial database state with selected language
       const initialDbWithLang = {
         ...defaultInitialDB,
@@ -824,12 +830,41 @@ export default function App() {
 
     try {
       const file = await pendingFileHandle.getFile();
-      const encryptedText = await file.text();
-      
-      // Try decrypting with entered password
-      const decryptedDb = await decryptData(encryptedText, passwordInput);
+      const rawText = await file.text();
+      if (!rawText || rawText.trim().length === 0) {
+        setAuthError("Il file selezionato è vuoto.");
+        return;
+      }
+
+      let parsedPayload: any;
+      try {
+        parsedPayload = JSON.parse(rawText);
+      } catch (e) {
+        setAuthError("Il file selezionato non è un formato JSON valido.");
+        return;
+      }
+
+      let decryptedDb: any;
+      if (parsedPayload.salt && parsedPayload.iv && parsedPayload.ciphertext) {
+        // Strictly encrypted database file
+        try {
+          decryptedDb = await decryptData(rawText, passwordInput);
+        } catch (decryptErr) {
+          console.error("Decryption failed:", decryptErr);
+          setAuthError("Password non corretta o archivio corrotto.");
+          return;
+        }
+      } else if (parsedPayload.settings) {
+        // Plain database file
+        decryptedDb = parsedPayload;
+      } else {
+        setAuthError("Formato database GainBusters non riconosciuto.");
+        return;
+      }
+
       if (!decryptedDb || !decryptedDb.settings) {
-        throw new Error("Contenuto cifrato non valido.");
+        setAuthError("Contenuto del database non valido.");
+        return;
       }
       
       // Setup file states
@@ -839,6 +874,9 @@ export default function App() {
       }
       const fullDb = { ...defaultInitialDB, ...decryptedDb, settings: mergedSettings };
       
+      // Purge previous storage caches before switching to new file
+      await storageService.purgeStorageCache();
+
       await saveFileHandleInIndexedDB(pendingFileHandle);
       
       setFileHandle(pendingFileHandle);
@@ -882,7 +920,7 @@ export default function App() {
 
       const loadedDb = await storageService.loadDatabaseState(passwordInput);
       if (!loadedDb || !loadedDb.settings) {
-        throw new Error("Contenuto non valido o password errata.");
+        throw new Error("Password non corretta o archivio corrotto.");
       }
 
       let mergedSettings = { ...defaultInitialDB.settings, ...loadedDb.settings };
@@ -908,8 +946,7 @@ export default function App() {
 
   const handleClearPersistedHandle = async () => {
     try {
-      await clearFileHandleFromIndexedDB();
-      storageService.clearSession();
+      await storageService.purgeStorageCache();
       setFileHandle(null);
       setBrowserPassword('');
       setHasPersistedHandle(false);
@@ -921,6 +958,8 @@ export default function App() {
       setPasswordInput('');
       setConfirmPasswordInput('');
       setAuthError('');
+      setDb(defaultInitialDB);
+      lastPersistedDbJsonRef.current = JSON.stringify(defaultInitialDB);
     } catch (err) {
       console.error("Errore durante la rimozione dell'archivio:", err);
     }
@@ -944,6 +983,11 @@ export default function App() {
         body: JSON.stringify({ password: passwordInput })
       });
       if (res.ok) {
+        const data = await res.json();
+        if (data.token) {
+          storageService.setLocalAuthToken(data.token);
+          sessionStorage.setItem('gainbusters_local_token', data.token);
+        }
         const initialDbWithLang = {
           ...db,
           settings: {
@@ -951,10 +995,12 @@ export default function App() {
             lang: lang
           }
         };
+        lastPersistedDbJsonRef.current = JSON.stringify(initialDbWithLang);
+        isInitialHydrationRef.current = false;
         setDb(initialDbWithLang);
         setIsAuthenticated(true);
         setPasswordSet(true);
-        saveDatabaseState(initialDbWithLang);
+        await saveDatabaseState(initialDbWithLang);
         setActiveTab('brokers'); // Auto-redirect to Broker & Portafoglio tab
       } else {
         const errData = await res.json();
@@ -974,7 +1020,13 @@ export default function App() {
         body: JSON.stringify({ password: passwordInput })
       });
       if (res.ok) {
+        const data = await res.json();
+        if (data.token) {
+          storageService.setLocalAuthToken(data.token);
+          sessionStorage.setItem('gainbusters_local_token', data.token);
+        }
         setIsAuthenticated(true);
+        setPasswordInput('');
       } else {
         setAuthError(t.incorrectPassword);
       }
@@ -999,8 +1051,11 @@ export default function App() {
         isInitialHydrationRef.current = false;
         triggerPriceSync(db);
       }
-    } catch (err) {
+    } catch (err: any) {
       console.error('Error retrieving database', err);
+      if (err?.message === 'UNAUTHORIZED') {
+        setIsAuthenticated(false);
+      }
     }
   };
 
@@ -3326,6 +3381,8 @@ export default function App() {
               onClick={() => {
                 setIsAuthenticated(false);
                 setPasswordInput('');
+                sessionStorage.removeItem('gainbusters_local_token');
+                storageService.clearSession();
               }}
               className="text-slate-400 hover:text-white transition p-2 hover:bg-slate-900 rounded hidden sm:block"
               title={t.logout}
@@ -3413,6 +3470,8 @@ export default function App() {
                   onClick={() => {
                     setIsAuthenticated(false);
                     setPasswordInput('');
+                    sessionStorage.removeItem('gainbusters_local_token');
+                    storageService.clearSession();
                   }}
                   className="w-full flex items-center gap-3 px-3.5 py-2.5 rounded-xl text-left text-sm font-semibold transition-all duration-300 text-rose-400 hover:text-rose-300 hover:bg-rose-950/30"
                 >
@@ -5330,6 +5389,60 @@ export default function App() {
                         );
                       })}
                     </div>
+                  </div>
+                </div>
+              </div>
+
+              {/* Storage & Database Engine Info */}
+              <div id="storage-engine-card" className="max-w-2xl mx-auto bg-slate-900/40 p-6 rounded-2xl border border-slate-800/80 backdrop-blur-md">
+                <div className="space-y-4">
+                  <div className="flex items-center justify-between border-b border-slate-800 pb-3">
+                    <div className="flex items-center gap-2">
+                      <ShieldCheck className="w-5 h-5 text-emerald-400" />
+                      <h3 className="font-extrabold text-sm text-white tracking-wider uppercase font-mono">
+                        Archiviazione & Sicurezza Database
+                      </h3>
+                    </div>
+                    <span className="text-[11px] font-mono font-bold px-2.5 py-1 rounded-full bg-slate-950 border border-slate-800 text-emerald-400">
+                      {storageMode === 'browser' ? 'Browser Mode (Client File)' : 'Local Server (Docker)'}
+                    </span>
+                  </div>
+
+                  <div className="text-xs text-slate-300 space-y-2 leading-relaxed">
+                    {storageMode === 'browser' ? (
+                      <>
+                        <p>
+                          I tuoi dati sono salvati in un archivio cifrato con algoritmo <strong>AES-GCM-256</strong> direttamente sul tuo dispositivo. Nessun dato lascia la memoria del browser.
+                        </p>
+                        {persistedFileName && (
+                          <div className="p-3 bg-slate-950/80 border border-slate-800 rounded-xl flex items-center justify-between">
+                            <div className="flex items-center gap-2">
+                              <Database className="w-4 h-4 text-sky-400" />
+                              <span className="font-mono text-xs text-slate-200 font-bold">{persistedFileName}</span>
+                            </div>
+                            <button
+                              onClick={handleClearPersistedHandle}
+                              className="text-xs font-bold text-rose-400 hover:text-rose-300 hover:bg-rose-950/40 px-3 py-1.5 rounded-lg border border-rose-500/20 transition cursor-pointer"
+                            >
+                              Disconnetti / Cambia Archivio
+                            </button>
+                          </div>
+                        )}
+                      </>
+                    ) : (
+                      <>
+                        <p>
+                          Il database è memorizzato sul server locale o contenitore Docker (<code>./data/db.json</code>). Tutte le operazioni di scrittura e lettura sono autenticate con token firmati.
+                        </p>
+                        <div className="p-3 bg-slate-950/80 border border-slate-800 rounded-xl flex items-center justify-between">
+                          <div className="flex items-center gap-2">
+                            <Database className="w-4 h-4 text-emerald-400" />
+                            <span className="font-mono text-xs text-slate-200">Server Backend: <strong>./data/db.json</strong></span>
+                          </div>
+                          <span className="text-[11px] font-mono text-emerald-400 font-bold">Attivo e Protetto</span>
+                        </div>
+                      </>
+                    )}
                   </div>
                 </div>
               </div>

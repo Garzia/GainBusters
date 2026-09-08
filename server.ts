@@ -167,6 +167,21 @@ function hashPassword(password: string): string {
   return crypto.createHash('sha256').update(password).digest('hex');
 }
 
+// Secret for signing session tokens in local server mode
+const SESSION_SECRET = process.env.SESSION_SECRET || 'gainbusters_session_secret_key_v1';
+function generateSessionToken(passwordHash: string): string {
+  return crypto.createHmac('sha256', SESSION_SECRET).update(passwordHash).digest('hex');
+}
+
+function verifyAuth(req: express.Request, db: any): boolean {
+  if (!db.settings?.passwordSet) return true;
+  const authHeader = req.headers.authorization || '';
+  const token = authHeader.replace(/^Bearer\s+/i, '').trim() || (req.headers['x-auth-token'] as string);
+  if (!token) return false;
+  const expected = generateSessionToken(db.settings.passwordHash || '');
+  return token === expected;
+}
+
 // ================= APP CONFIG ENDPOINTS =================
 
 app.get('/api/config', (req, res) => {
@@ -179,7 +194,10 @@ app.get('/api/config', (req, res) => {
 
 app.post('/api/auth/status', (req, res) => {
   const db = readDB();
-  res.json({ passwordSet: db.settings.passwordSet });
+  res.json({
+    passwordSet: !!db.settings.passwordSet,
+    storageMode: STORAGE_MODE
+  });
 });
 
 app.post('/api/auth/setup', (req, res) => {
@@ -191,10 +209,12 @@ app.post('/api/auth/setup', (req, res) => {
   if (db.settings.passwordSet) {
     return res.status(400).json({ error: 'Password is already set.' });
   }
-  db.settings.passwordHash = hashPassword(password);
+  const hash = hashPassword(password);
+  db.settings.passwordHash = hash;
   db.settings.passwordSet = true;
   writeDB(db);
-  res.json({ success: true });
+  const token = generateSessionToken(hash);
+  res.json({ success: true, token });
 });
 
 app.post('/api/auth/login', (req, res) => {
@@ -205,7 +225,8 @@ app.post('/api/auth/login', (req, res) => {
   }
   const hash = hashPassword(password || '');
   if (hash === db.settings.passwordHash) {
-    res.json({ success: true });
+    const token = generateSessionToken(db.settings.passwordHash);
+    res.json({ success: true, token });
   } else {
     res.status(401).json({ error: 'Incorrect password.' });
   }
@@ -215,6 +236,9 @@ app.post('/api/auth/login', (req, res) => {
 
 app.get('/api/db', (req, res) => {
   const db = readDB();
+  if (!verifyAuth(req, db)) {
+    return res.status(401).json({ error: 'Unauthorized: invalid or missing authentication token.' });
+  }
   // Strip the password hash before sending to client for security
   const cleanDb = {
     ...db,
@@ -227,11 +251,15 @@ app.get('/api/db', (req, res) => {
 });
 
 app.post('/api/db', (req, res) => {
+  const db = readDB();
+  if (!verifyAuth(req, db)) {
+    return res.status(401).json({ error: 'Unauthorized: invalid or missing authentication token.' });
+  }
   const newDb = req.body;
   if (!newDb || typeof newDb !== 'object') {
     return res.status(400).json({ error: 'Invalid database payload.' });
   }
-  const currentDb = readDB();
+  const currentDb = db;
   const passwordHash = currentDb.settings?.passwordHash;
   const mergedSettings = {
     ...currentDb.settings,

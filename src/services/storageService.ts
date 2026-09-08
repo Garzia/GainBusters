@@ -4,7 +4,9 @@ import {
   saveDatabaseStateInIndexedDB,
   getDatabaseStateFromIndexedDB,
   saveFileHandleInIndexedDB,
-  getFileHandleFromIndexedDB
+  getFileHandleFromIndexedDB,
+  clearFileHandleFromIndexedDB,
+  clearDatabaseStateFromIndexedDB
 } from '../utils/indexedDB';
 
 export type StorageMode = 'browser' | 'local';
@@ -12,6 +14,7 @@ export type StorageMode = 'browser' | 'local';
 class StorageService {
   private mode: StorageMode = 'browser';
   private browserPassword: string = '';
+  private localAuthToken: string = '';
   private fileHandle: any | null = null;
   private isSaving: boolean = false;
   private latestStateToSave: DBState | null = null;
@@ -34,6 +37,14 @@ class StorageService {
     return this.browserPassword;
   }
 
+  public setLocalAuthToken(token: string) {
+    this.localAuthToken = token;
+  }
+
+  public getLocalAuthToken(): string {
+    return this.localAuthToken;
+  }
+
   public setFileHandle(handle: any) {
     this.fileHandle = handle;
     if (handle) {
@@ -49,8 +60,29 @@ class StorageService {
 
   public clearSession() {
     this.browserPassword = '';
+    this.localAuthToken = '';
     this.fileHandle = null;
     this.latestStateToSave = null;
+  }
+
+  /**
+   * Completely purges all local storage and IndexedDB caches for database states and handles.
+   * Guarantees zero cross-contamination when switching between files or storage modes.
+   */
+  public async purgeStorageCache(): Promise<void> {
+    this.clearSession();
+    try {
+      await clearFileHandleFromIndexedDB();
+      await clearDatabaseStateFromIndexedDB();
+    } catch (e) {
+      console.warn('[StorageService] Error purging IndexedDB:', e);
+    }
+    try {
+      localStorage.removeItem('gainbusters_db');
+      localStorage.removeItem('gainbusters_db_encrypted');
+    } catch (e) {
+      console.warn('[StorageService] Error purging LocalStorage:', e);
+    }
   }
 
   /**
@@ -96,7 +128,7 @@ class StorageService {
     if (this.mode === 'browser') {
       let savedToFile = false;
 
-      // 1. Primary browser storage: File System Access API handle if user selected a file
+      // 1. Primary browser storage: File System Access API handle
       if (this.fileHandle && this.browserPassword) {
         try {
           const encryptedText = await encryptData(state, this.browserPassword);
@@ -118,19 +150,16 @@ class StorageService {
         }
       }
 
-      // 2. High-capacity IndexedDB snapshot (Never suffers from 5MB localStorage quota)
+      // 2. High-capacity IndexedDB snapshot - ALWAYS encrypted if browserPassword is set!
+      // In browser mode, we NEVER save unencrypted database copies to prevent bypass
       try {
         if (this.browserPassword) {
           const encryptedText = await encryptData(state, this.browserPassword);
           await saveDatabaseStateInIndexedDB({
+            mode: 'browser',
             encrypted: true,
+            fileName: this.fileHandle?.name || 'vault',
             data: encryptedText,
-            timestamp: Date.now()
-          });
-        } else {
-          await saveDatabaseStateInIndexedDB({
-            encrypted: false,
-            data: state,
             timestamp: Date.now()
           });
         }
@@ -138,19 +167,24 @@ class StorageService {
         console.warn('[StorageService] IndexedDB state snapshot write failed:', err);
       }
 
-      // 3. Mirror to LocalStorage as additional safety net if space permits
+      // 3. Mirror to LocalStorage as additional safety net (strictly encrypted)
       try {
         if (this.browserPassword) {
           const encryptedText = await encryptData(state, this.browserPassword);
           localStorage.setItem('gainbusters_db_encrypted', encryptedText);
-        } else {
-          localStorage.setItem('gainbusters_db', JSON.stringify(state));
+          // Never leave plain unencrypted database in localStorage in browser mode!
+          localStorage.removeItem('gainbusters_db');
         }
       } catch (err) {
         // Quota exceeded in localStorage is expected when priceCache is large; ignore safely
       }
     } else {
-      // Local Mode: Atomic POST to backend (with auto-retry)
+      // Local Mode: Atomic POST to backend (with auto-retry and auth headers)
+      const headers: Record<string, string> = { 'Content-Type': 'application/json' };
+      if (this.localAuthToken) {
+        headers['Authorization'] = `Bearer ${this.localAuthToken}`;
+      }
+
       let attempts = 0;
       let success = false;
       let lastError = null;
@@ -160,16 +194,22 @@ class StorageService {
         try {
           const res = await fetch('/api/db', {
             method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
+            headers,
             body: JSON.stringify(state)
           });
+          if (res.status === 401) {
+            throw new Error('UNAUTHORIZED');
+          }
           if (!res.ok) {
             throw new Error(`Server returned HTTP ${res.status}`);
           }
           success = true;
           console.log('[StorageService] Successfully persisted database to local server storage.');
-        } catch (err) {
+        } catch (err: any) {
           lastError = err;
+          if (err?.message === 'UNAUTHORIZED') {
+            throw err;
+          }
           console.warn(`[StorageService] Save attempt ${attempts} failed:`, err);
           if (attempts < 3) {
             await new Promise(res => setTimeout(res, 200 * attempts));
@@ -177,131 +217,142 @@ class StorageService {
         }
       }
 
-      // Shadow snapshot in IndexedDB as a client-side backup guarantee
-      let idbSaved = false;
-      try {
-        await saveDatabaseStateInIndexedDB({
-          encrypted: false,
-          data: state,
-          timestamp: Date.now()
-        });
-        idbSaved = true;
-      } catch (e) {
-        // Ignore IndexedDB shadow copy error
-      }
-
       if (!success && lastError) {
-        if (idbSaved) {
-          console.warn('[StorageService] Server backend unreachable, but data was preserved securely in client IndexedDB shadow store.');
-        } else {
-          console.error('[StorageService] Failed all attempts to save database to server backend.');
-          throw lastError;
-        }
+        console.error('[StorageService] Failed all attempts to save database to server backend.');
+        throw lastError;
       }
     }
   }
 
   /**
    * Primary entry point for loading DB state atomically.
+   * Strictly verifies password on encrypted sources and prevents cross-file/unencrypted data leakage.
    */
   public async loadDatabaseState(passwordOverride?: string): Promise<DBState | null> {
     const passwordToUse = passwordOverride || this.browserPassword;
 
     if (this.mode === 'browser') {
-      // 1. Try fileHandle if available
+      // 1. Authoritative source: File System Access API handle
       if (this.fileHandle) {
+        if (typeof this.fileHandle.queryPermission === 'function') {
+          let perm = await this.fileHandle.queryPermission({ mode: 'readwrite' });
+          if (perm !== 'granted' && typeof this.fileHandle.requestPermission === 'function') {
+            perm = await this.fileHandle.requestPermission({ mode: 'readwrite' });
+          }
+        }
+
+        const file = await this.fileHandle.getFile();
+        const rawText = await file.text();
+        if (!rawText || rawText.trim().length === 0) {
+          throw new Error('Il file del database è vuoto.');
+        }
+
+        let isEncrypted = false;
         try {
-          if (typeof this.fileHandle.queryPermission === 'function') {
-            let perm = await this.fileHandle.queryPermission({ mode: 'readwrite' });
-            if (perm !== 'granted' && typeof this.fileHandle.requestPermission === 'function') {
-              perm = await this.fileHandle.requestPermission({ mode: 'readwrite' });
-            }
+          const parsed = JSON.parse(rawText);
+          if (parsed && parsed.salt && parsed.iv && parsed.ciphertext) {
+            isEncrypted = true;
+          }
+        } catch (e) {
+          throw new Error('Formato file non valido (JSON corrotto).');
+        }
+
+        if (isEncrypted) {
+          if (!passwordToUse) {
+            throw new Error('Master password richiesta per decrittografare il file.');
+          }
+          // Attempt decryption. CRITICAL: DO NOT CATCH AND FALL BACK TO PREVIOUS SNAPSHOT!
+          // If decryption fails, it MUST throw so wrong password is rejected!
+          const decrypted = await decryptData(rawText, passwordToUse);
+          if (!decrypted || typeof decrypted !== 'object' || !decrypted.settings) {
+            throw new Error('Password non corretta o archivio corrotto.');
           }
 
-          const file = await this.fileHandle.getFile();
-          const encryptedText = await file.text();
-          if (encryptedText && encryptedText.trim().length > 0) {
-            const decrypted = await decryptData(encryptedText, passwordToUse);
-            if (decrypted && typeof decrypted === 'object') {
-              // Update IndexedDB snapshot with the fresh data from file
-              saveDatabaseStateInIndexedDB({
-                encrypted: true,
-                data: encryptedText,
-                timestamp: Date.now()
-              }).catch(() => {});
-              return decrypted as DBState;
+          // Cache ONLY encrypted data tagged with fileName
+          saveDatabaseStateInIndexedDB({
+            mode: 'browser',
+            encrypted: true,
+            fileName: this.fileHandle.name,
+            data: rawText,
+            timestamp: Date.now()
+          }).catch(() => {});
+
+          return decrypted as DBState;
+        } else {
+          // Plain JSON file
+          try {
+            const parsed = JSON.parse(rawText);
+            if (parsed && typeof parsed === 'object' && parsed.settings) {
+              return parsed as DBState;
             }
+            throw new Error('Struttura database non valida.');
+          } catch (e: any) {
+            throw new Error(e.message || 'Formato file non valido.');
           }
-        } catch (err) {
-          console.warn('[StorageService] Failed reading/decrypting fileHandle, attempting IndexedDB:', err);
         }
       }
 
-      // 2. Try IndexedDB state snapshot (full capacity, primary browser backup)
+      // 2. Pure browser mode without fileHandle: Check IndexedDB snapshot
       try {
         const idbSnapshot = await getDatabaseStateFromIndexedDB();
         if (idbSnapshot) {
-          if (idbSnapshot.encrypted && idbSnapshot.data && passwordToUse) {
+          // If snapshot was saved by local mode or marked unencrypted while password is required, ignore it!
+          if (idbSnapshot.encrypted && idbSnapshot.data) {
+            if (!passwordToUse) {
+              throw new Error('Master password richiesta per sbloccare l\'archivio.');
+            }
             const decrypted = await decryptData(idbSnapshot.data, passwordToUse);
-            if (decrypted && typeof decrypted === 'object') {
+            if (decrypted && typeof decrypted === 'object' && decrypted.settings) {
               return decrypted as DBState;
             }
-          } else if (idbSnapshot.data && typeof idbSnapshot.data === 'object' && !idbSnapshot.encrypted) {
-            return idbSnapshot.data as DBState;
-          } else if (typeof idbSnapshot === 'object' && idbSnapshot.settings && idbSnapshot.transactions) {
-            return idbSnapshot as DBState;
+            throw new Error('Password non corretta.');
+          } else if (idbSnapshot.mode === 'browser' && !idbSnapshot.encrypted && idbSnapshot.data) {
+            // Plain unencrypted snapshot in browser mode (only if not encrypted)
+            if (!passwordToUse) {
+              return idbSnapshot.data as DBState;
+            }
           }
         }
       } catch (err) {
         console.warn('[StorageService] Failed reading IndexedDB snapshot:', err);
+        throw err;
       }
 
-      // 3. Try encrypted LocalStorage fallback
+      // 3. Encrypted LocalStorage fallback
       try {
         const encFallback = localStorage.getItem('gainbusters_db_encrypted');
-        if (encFallback && passwordToUse) {
+        if (encFallback) {
+          if (!passwordToUse) {
+            throw new Error('Master password richiesta per sbloccare l\'archivio.');
+          }
           const decrypted = await decryptData(encFallback, passwordToUse);
-          if (decrypted && typeof decrypted === 'object') {
+          if (decrypted && typeof decrypted === 'object' && decrypted.settings) {
             return decrypted as DBState;
           }
+          throw new Error('Password non corretta.');
         }
       } catch (err) {
         console.warn('[StorageService] Failed decrypting encrypted LocalStorage fallback:', err);
-      }
-
-      // 4. Try plain LocalStorage fallback
-      try {
-        const plainFallback = localStorage.getItem('gainbusters_db');
-        if (plainFallback) {
-          const parsed = JSON.parse(plainFallback);
-          if (parsed && typeof parsed === 'object') {
-            return parsed as DBState;
-          }
-        }
-      } catch (err) {
-        console.warn('[StorageService] Failed reading plain LocalStorage fallback:', err);
+        throw err;
       }
 
       return null;
     } else {
-      // Local mode: Fetch from /api/db
-      try {
-        const res = await fetch('/api/db');
-        if (!res.ok) throw new Error(`Server returned HTTP ${res.status}`);
-        const data = await res.json();
-        return data as DBState;
-      } catch (err) {
-        console.error('[StorageService] Failed loading database from backend, attempting offline IndexedDB snapshot:', err);
-        try {
-          const idbSnapshot = await getDatabaseStateFromIndexedDB();
-          if (idbSnapshot && idbSnapshot.data && typeof idbSnapshot.data === 'object') {
-            return idbSnapshot.data as DBState;
-          }
-        } catch (e) {
-          // Ignore
-        }
-        return null;
+      // Local mode: Fetch from /api/db with local auth token
+      const headers: Record<string, string> = { 'Content-Type': 'application/json' };
+      if (this.localAuthToken) {
+        headers['Authorization'] = `Bearer ${this.localAuthToken}`;
       }
+
+      const res = await fetch('/api/db', { headers });
+      if (res.status === 401) {
+        throw new Error('UNAUTHORIZED');
+      }
+      if (!res.ok) {
+        throw new Error(`Server returned HTTP ${res.status}`);
+      }
+      const data = await res.json();
+      return data as DBState;
     }
   }
 }

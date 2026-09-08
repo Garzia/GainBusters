@@ -48,22 +48,32 @@ export async function encryptData(jsonData: any, password: string): Promise<stri
 }
 
 export async function decryptData(encryptedStr: string, password: string): Promise<any> {
-  const payload = JSON.parse(encryptedStr);
-  if (!payload.salt || !payload.iv || !payload.ciphertext) {
-    throw new Error("Formato cifrato non valido");
+  let payload: any;
+  try {
+    payload = JSON.parse(encryptedStr);
+  } catch (e) {
+    throw new Error("Formato file non valido (JSON non corretto).");
+  }
+
+  if (!payload || !payload.salt || !payload.iv || !payload.ciphertext) {
+    throw new Error("Formato cifrato non valido o file non protetto da GainBusters.");
   }
   
-  const salt = Uint8Array.from(atob(payload.salt), c => c.charCodeAt(0));
-  const iv = Uint8Array.from(atob(payload.iv), c => c.charCodeAt(0));
-  const ciphertext = Uint8Array.from(atob(payload.ciphertext), c => c.charCodeAt(0));
-  
-  const key = await getEncryptionKey(password, salt);
-  const decrypted = await window.crypto.subtle.decrypt(
-    { name: "AES-GCM", iv: iv },
-    key,
-    ciphertext
-  );
-  
-  const dec = new TextDecoder();
-  return JSON.parse(dec.decode(decrypted));
+  try {
+    const salt = Uint8Array.from(atob(payload.salt), c => c.charCodeAt(0));
+    const iv = Uint8Array.from(atob(payload.iv), c => c.charCodeAt(0));
+    const ciphertext = Uint8Array.from(atob(payload.ciphertext), c => c.charCodeAt(0));
+    
+    const key = await getEncryptionKey(password, salt);
+    const decrypted = await window.crypto.subtle.decrypt(
+      { name: "AES-GCM", iv: iv },
+      key,
+      ciphertext
+    );
+    
+    const dec = new TextDecoder();
+    return JSON.parse(dec.decode(decrypted));
+  } catch (err: any) {
+    throw new Error("Password non corretta o archivio cifrato corrotto.");
+  }
 }
