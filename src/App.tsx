@@ -3,12 +3,13 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import React, { useState, useEffect, useRef, useMemo } from 'react';
+import React, { useState, useEffect, useRef, useMemo, useCallback } from 'react';
 import { translations } from './locales/index.ts';
 import { Currency, DBState, Account, Portfolio, Transaction, TransactionType, Transfer } from './types.ts';
 import { encryptData, decryptData } from './utils/crypto.ts';
 import { saveFileHandleInIndexedDB, getFileHandleFromIndexedDB, clearFileHandleFromIndexedDB } from './utils/indexedDB.ts';
-import { syncPricesLocally } from './utils/syncPrices.ts';
+import { storageService } from './services/storageService.ts';
+import { syncPricesLocally, isCryptoTicker } from './utils/syncPrices.ts';
 import MissionPage from './components/MissionPage.tsx';
 import ToolsPage from './components/ToolsPage.tsx';
 import OtherCostsPage from './components/OtherCostsPage.tsx';
@@ -18,14 +19,22 @@ import { PositionsTable } from './components/PositionsTable.tsx';
 import { TickerInput } from './components/TickerInput.tsx';
 import { TransactionModal } from './components/TransactionModal.tsx';
 import { TransferModal } from './components/TransferModal.tsx';
+import { ModalPortal } from './components/ModalPortal.tsx';
 import { TransfersTable, TransferRecord } from './components/TransfersTable.tsx';
 import { formatDateString } from './utils.ts';
 import {
   calculateHoldingsAndLots,
   calculateFinancialMetrics,
   calculateTransactionTableTotals,
-  calculatePortfolioPerformance
+  calculatePortfolioPerformance,
+  executeTransferTransactionPair,
+  getAvailableLotsForTransfer,
+  getTransferEffectiveCapital,
+  cleanFloatNoise,
+  getDailyPricePairForSymbol,
+  DailyPricePair
 } from './utils/finance.ts';
+import { QuantityDisplay } from './components/QuantityDisplay.tsx';
 import {
   Home,
   Briefcase,
@@ -137,10 +146,16 @@ export function formatCurrency(value: number, currencyCode: string): string {
   }
 }
 
-export function formatQuantity(qty: number): string {
-  if (qty % 1 === 0) return qty.toString();
-  // Keep up to 8 decimal places and strip trailing zeros
-  return qty.toFixed(8).replace(/\.?0+$/, '');
+export function formatQuantity(qty: number | string | undefined | null): string {
+  if (qty === undefined || qty === null || qty === '') return '0';
+  const num = Number(qty);
+  if (isNaN(num)) return '0';
+  if (num % 1 === 0) return num.toString();
+  return num.toLocaleString('en-US', {
+    minimumFractionDigits: 0,
+    maximumFractionDigits: 20,
+    useGrouping: false
+  });
 }
 
 export default function App() {
@@ -179,6 +194,14 @@ export default function App() {
     otherCosts: [],
     priceCache: {}
   });
+
+  // Central persistence tracker to guarantee no unsaved changes are lost
+  const lastPersistedDbJsonRef = useRef<string>('');
+  const isInitialHydrationRef = useRef<boolean>(true);
+  const dbRef = useRef<DBState>(db);
+  useEffect(() => {
+    dbRef.current = db;
+  }, [db]);
 
   // Navigation state
   const [activeTab, setActiveTab] = useState<string>('dashboard');
@@ -224,8 +247,10 @@ export default function App() {
     priceCurrency: string;
     sourceCommission: number | string;
     sourceCommissionCurrency: string;
+    sourceCommissionPaymentMode?: 'EXTERNAL' | 'ASSET';
     destCommission: number | string;
     destCommissionCurrency: string;
+    destCommissionPaymentMode?: 'EXTERNAL' | 'ASSET';
     date: string;
     criteria: 'FIFO' | 'LIFO';
     notes: string;
@@ -240,8 +265,10 @@ export default function App() {
     priceCurrency: 'EUR',
     sourceCommission: '',
     sourceCommissionCurrency: 'EUR',
+    sourceCommissionPaymentMode: 'EXTERNAL',
     destCommission: '',
     destCommissionCurrency: 'EUR',
+    destCommissionPaymentMode: 'EXTERNAL',
     date: new Date().toISOString().substring(0, 16),
     criteria: 'FIFO',
     notes: ''
@@ -437,12 +464,14 @@ export default function App() {
         const data = await res.json();
         const mode = data.storageMode === 'local' ? 'local' : 'browser';
         setStorageMode(mode);
+        storageService.setStorageMode(mode);
         return mode;
       }
     } catch (err) {
       console.warn('Could not read config endpoint, defaulting storageMode to "browser"', err);
     }
     setStorageMode('browser');
+    storageService.setStorageMode('browser');
     return 'browser';
   };
 
@@ -644,6 +673,8 @@ export default function App() {
   // API fetches
   const checkAuthStatus = async (resolvedMode?: 'local' | 'browser') => {
     const currentMode = resolvedMode || storageMode;
+    storageService.setStorageMode(currentMode);
+
     if (currentMode === 'browser') {
       try {
         const handle = await getFileHandleFromIndexedDB();
@@ -651,11 +682,14 @@ export default function App() {
           setHasPersistedHandle(true);
           setPersistedFileName(handle.name);
           setFileHandle(handle);
+          storageService.setFileHandle(handle);
           setPasswordSet(true);
           setIsAuthenticated(false);
         } else {
+          const hasFallbackEnc = !!localStorage.getItem('gainbusters_db_encrypted');
+          const hasFallbackPlain = !!localStorage.getItem('gainbusters_db');
           setHasPersistedHandle(false);
-          setPasswordSet(false);
+          setPasswordSet(hasFallbackEnc || hasFallbackPlain);
           setIsAuthenticated(false);
         }
       } catch (err) {
@@ -726,7 +760,12 @@ export default function App() {
       
       setFileHandle(handle);
       setBrowserPassword(passwordInput);
+      storageService.setFileHandle(handle);
+      storageService.setBrowserPassword(passwordInput);
+      lastPersistedDbJsonRef.current = JSON.stringify(initialDbWithLang);
+      isInitialHydrationRef.current = false;
       setDb(initialDbWithLang);
+      await storageService.saveDatabaseState(initialDbWithLang);
       
       // Clean up States
       setHasPersistedHandle(true);
@@ -804,7 +843,12 @@ export default function App() {
       
       setFileHandle(pendingFileHandle);
       setBrowserPassword(passwordInput);
+      storageService.setFileHandle(pendingFileHandle);
+      storageService.setBrowserPassword(passwordInput);
+      lastPersistedDbJsonRef.current = JSON.stringify(fullDb);
+      isInitialHydrationRef.current = false;
       setDb(fullDb);
+      await storageService.saveDatabaseState(fullDb);
       if (fullDb.settings?.lang) {
         setLang(fullDb.settings.lang);
       }
@@ -829,41 +873,27 @@ export default function App() {
       setAuthError('Inserisci la master password.');
       return;
     }
-    if (!fileHandle) {
-      setAuthError('Nessun file database registrato.');
-      return;
-    }
 
     try {
-      // 1) Verify and request permission from browser
-      let permissionState = await fileHandle.queryPermission({ mode: 'readwrite' });
-      if (permissionState !== 'granted') {
-        permissionState = await fileHandle.requestPermission({ mode: 'readwrite' });
+      storageService.setBrowserPassword(passwordInput);
+      if (fileHandle) {
+        storageService.setFileHandle(fileHandle);
       }
-      
-      if (permissionState !== 'granted') {
-        setAuthError("Permesso di lettura/scrittura sul file negato dal browser.");
-        return;
+
+      const loadedDb = await storageService.loadDatabaseState(passwordInput);
+      if (!loadedDb || !loadedDb.settings) {
+        throw new Error("Contenuto non valido o password errata.");
       }
-      
-      // 2) Read current file contents
-      const file = await fileHandle.getFile();
-      const encryptedText = await file.text();
-      
-      // 3) Try decrypting with the password
-      const decryptedDb = await decryptData(encryptedText, passwordInput);
-      if (!decryptedDb || !decryptedDb.settings) {
-        throw new Error("Contenuto non valido.");
-      }
-      
-      // 4) Clean and merge states
-      let mergedSettings = { ...defaultInitialDB.settings, ...decryptedDb.settings };
+
+      let mergedSettings = { ...defaultInitialDB.settings, ...loadedDb.settings };
       if (!mergedSettings.inflationIndices || mergedSettings.inflationIndices.length === 0) {
         mergedSettings.inflationIndices = defaultInitialDB.settings.inflationIndices;
       }
-      const fullDb = { ...defaultInitialDB, ...decryptedDb, settings: mergedSettings };
-      
+      const fullDb = { ...defaultInitialDB, ...loadedDb, settings: mergedSettings };
+
       setBrowserPassword(passwordInput);
+      lastPersistedDbJsonRef.current = JSON.stringify(fullDb);
+      isInitialHydrationRef.current = false;
       setDb(fullDb);
       if (fullDb.settings?.lang) {
         setLang(fullDb.settings.lang);
@@ -879,6 +909,7 @@ export default function App() {
   const handleClearPersistedHandle = async () => {
     try {
       await clearFileHandleFromIndexedDB();
+      storageService.clearSession();
       setFileHandle(null);
       setBrowserPassword('');
       setHasPersistedHandle(false);
@@ -953,22 +984,20 @@ export default function App() {
   };
 
   const fetchDB = async () => {
-    if (storageMode === 'browser') {
-      if (db && db.settings) {
-        triggerPriceSync(db);
-      }
-      return;
-    }
-
     try {
-      const r = await fetch('/api/db');
-      if (r.ok) {
-        const fullState = await r.json();
-        setDb(fullState);
-        triggerPriceSync(fullState);
-        if (fullState.settings?.lang) {
-          setLang(fullState.settings.lang);
+      const loadedDb = await storageService.loadDatabaseState();
+      if (loadedDb && loadedDb.settings) {
+        lastPersistedDbJsonRef.current = JSON.stringify(loadedDb);
+        isInitialHydrationRef.current = false;
+        setDb(loadedDb);
+        triggerPriceSync(loadedDb);
+        if (loadedDb.settings.lang) {
+          setLang(loadedDb.settings.lang);
         }
+      } else if (db && db.settings) {
+        lastPersistedDbJsonRef.current = JSON.stringify(db);
+        isInitialHydrationRef.current = false;
+        triggerPriceSync(db);
       }
     } catch (err) {
       console.error('Error retrieving database', err);
@@ -1002,14 +1031,22 @@ export default function App() {
     setSyncFeedback({ message: t.connectionToYahoo, type: 'info' });
     try {
       const updatedDb = await syncPricesLocally(activeSymbols, force, stateObj);
-      setDb(updatedDb);
-      saveDatabaseState(updatedDb);
+      const newPriceCache = updatedDb.priceCache || {};
+      const current = dbRef.current || stateObj;
+      const mergedDb: DBState = {
+        ...current,
+        priceCache: {
+          ...(current.priceCache || {}),
+          ...newPriceCache
+        }
+      };
+      await saveDatabaseState(mergedDb);
       setSyncFeedback({ message: t.quotesUpdatedSuccess, type: 'success' });
       setTimeout(() => setSyncFeedback(null), 4000);
     } catch (err) {
       console.error('Price sync failed', err);
-      setSyncFeedback({ message: t.quotesSyncConnectionFailed, type: 'error' });
-      setTimeout(() => setSyncFeedback(null), 5000);
+      setSyncFeedback({ message: t.quotesSyncConnectionFailed || 'Errore aggiornamento quotazioni.', type: 'error' });
+      setTimeout(() => setSyncFeedback(null), 4000);
     } finally {
       setIsSyncingPrices(false);
     }
@@ -1111,6 +1148,18 @@ export default function App() {
   yesterdayObj.setDate(yesterdayObj.getDate() - 1);
   const yesterdayStr = yesterdayObj.toISOString().split('T')[0];
 
+  const getDailyPricePair = (sym: string, fallbackPriceNative: number): DailyPricePair => {
+    const isCrypto = isCryptoTicker(sym);
+    return getDailyPricePairForSymbol(
+      sym,
+      db.priceCache,
+      fallbackPriceNative,
+      todayStr,
+      yesterdayStr,
+      isCrypto
+    );
+  };
+
   // CENTRALIZED ATOMIC FINANCIAL CALCULATION
   const financialMetrics = calculateFinancialMetrics(
     db.transactions,
@@ -1123,7 +1172,8 @@ export default function App() {
     getTickerCurrency,
     todayStr,
     yesterdayStr,
-    tickerFilterSymbol
+    tickerFilterSymbol,
+    getDailyPricePair
   );
 
   const {
@@ -1290,12 +1340,53 @@ export default function App() {
         cumulativeCommissions += commInDisplay;
       });
 
-      // Accumulate other costs (taxes, fees, bolli) on this day chronologically
+      // Cumulative other costs (taxes, fees, bolli) on this day chronologically
       const otherCostsOnDay = activeOtherCosts.filter(c => c.date.split('T')[0] === dateString);
       otherCostsOnDay.forEach((c) => {
         const costInDisplay = convertValue(c.amount || 0, c.currency || 'EUR', selectedCurrency, dateString);
         cumulativeOtherCosts += costInDisplay;
       });
+
+      // Cumulative net capital invested up to dateString (Buys - Sells across active scope)
+      let dayNetInvested = 0;
+      activeTxSorted.forEach((tx) => {
+        const txDate = tx.date.split('T')[0];
+        if (txDate > dateString) return;
+        if (tickerFilterSymbol && tx.symbol.toUpperCase().trim() !== tickerFilterSymbol.toUpperCase().trim()) return;
+
+        const valInDisplay = convertValue(
+          tx.qty * tx.price,
+          tx.currency || 'EUR',
+          selectedCurrency,
+          txDate
+        );
+
+        if (tx.type === TransactionType.BUY) {
+          dayNetInvested += valInDisplay;
+        } else if (tx.type === TransactionType.SELL) {
+          dayNetInvested -= valInDisplay;
+        } else if (tx.type === TransactionType.TRANSFER_IN) {
+          const peerTx = db.transactions.find(t => t.id === tx.transferOutTransactionId);
+          const isInternal = peerTx && activePortIds.includes(peerTx.portfolioId);
+          if (!isInternal) {
+            const transCap = getTransferEffectiveCapital(tx, db.transactions, selectedCurrency, convertValue);
+            dayNetInvested += transCap;
+          }
+        } else if (tx.type === TransactionType.TRANSFER_OUT) {
+          const peerTx = db.transactions.find(t => t.id === tx.transferInTransactionId);
+          const isInternal = peerTx && activePortIds.includes(peerTx.portfolioId);
+          if (!isInternal) {
+            const transCap = getTransferEffectiveCapital(tx, db.transactions, selectedCurrency, convertValue);
+            dayNetInvested -= transCap;
+          }
+        }
+      });
+      dayNetInvested = cleanFloatNoise(dayNetInvested);
+
+      // If on this day no holdings remain in the active perimeter, invested capital is 0
+      if (dayNominalBasis <= 1e-12) {
+        dayNetInvested = 0;
+      }
 
       // Adjust currentValue and realValueBased based on active includeCommissions setting
       const finalDayValue = dayValue - (includeCommissions ? (cumulativeCommissions + cumulativeOtherCosts) : 0);
@@ -1346,8 +1437,8 @@ export default function App() {
 
       timeline.push({
         date: dateString,
-        investedNominal: dayNominalBasis,
-        investedWithCommissions: dayNominalBasis + (includeCommissions ? (cumulativeCommissions + cumulativeOtherCosts) : 0),
+        investedNominal: dayNetInvested,
+        investedWithCommissions: dayNetInvested + (includeCommissions ? (cumulativeCommissions + cumulativeOtherCosts) : 0),
         currentValue: finalDayValue,
         realValueAdjusted: realValInflatedDiscount,
         benchmarkValue: benchClosingNormalized
@@ -1478,83 +1569,56 @@ export default function App() {
     const nextVal = !includeCommissions;
     setIncludeCommissions(nextVal);
     
+    const currentDb = dbRef.current || db;
     const updatedSettings = {
-      ...db.settings,
+      ...currentDb.settings,
       includeCommissions: nextVal
     };
     const updatedDb = {
-      ...db,
+      ...currentDb,
       settings: updatedSettings
     };
     await saveDatabaseState(updatedDb);
   };
 
-  // ================= GENERAL MUTATORS =================
+  // ================= GENERAL MUTATORS & CENTRAL PERSISTENCE =================
 
-  const saveDatabaseState = async (newDb: DBState) => {
-    setDb(newDb);
-    if (storageMode === 'browser') {
-      if (fileHandle) {
-        try {
-          const encryptedText = await encryptData(newDb, browserPassword);
-          const writable = await fileHandle.createWritable();
-          await writable.write(encryptedText);
-          await writable.close();
-          console.log('Background auto-save to PC file succeeded!');
-        } catch (err) {
-          console.error('Auto-save to PC file failed, falling back to localStorage', err);
-          try {
-            localStorage.setItem('gainbusters_db', JSON.stringify(newDb));
-          } catch (_) {}
-        }
-      } else {
-        try {
-          localStorage.setItem('gainbusters_db', JSON.stringify(newDb));
-        } catch (_) {}
-      }
-    } else {
-      // Write accounts / portfolios / transactions / settings respectively
-      try {
-        await fetch('/api/db/settings', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify(newDb.settings)
-        });
-        await fetch('/api/db/accounts', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ accounts: newDb.accounts })
-        });
-        await fetch('/api/db/portfolios', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ portfolios: newDb.portfolios })
-        });
-        await fetch('/api/db/transactions', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ transactions: newDb.transactions })
-        });
-        await fetch('/api/db/transfers', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ transfers: newDb.transfers || [] })
-        });
-        await fetch('/api/db/otherCosts', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ otherCosts: newDb.otherCosts || [] })
-        });
-      } catch (err) {
-        console.error('State mutation persistence failed on local backend', err);
-      }
+  const saveDatabaseState = useCallback(async (newDb: DBState) => {
+    try {
+      dbRef.current = newDb;
+      lastPersistedDbJsonRef.current = JSON.stringify(newDb);
+      setDb(newDb);
+      await storageService.saveDatabaseState(newDb);
+    } catch (err) {
+      console.error('[App] Failed to save database state:', err);
     }
-  };
+  }, []);
+
+  // Centralized safety net: guarantees that ANY modification to db state is automatically persisted perennially
+  useEffect(() => {
+    if (!isAuthenticated || isInitialHydrationRef.current) return;
+    try {
+      const currentJson = JSON.stringify(db);
+      if (currentJson && currentJson !== lastPersistedDbJsonRef.current) {
+        lastPersistedDbJsonRef.current = currentJson;
+        const timer = setTimeout(() => {
+          const fresh = dbRef.current || db;
+          storageService.saveDatabaseState(fresh).catch(err => {
+            console.error('[Central Persistence Safety Net] Auto-save error:', err);
+          });
+        }, 300);
+        return () => clearTimeout(timer);
+      }
+    } catch (e) {
+      console.warn('[Central Persistence Safety Net] State serialization check failed:', e);
+    }
+  }, [db, isAuthenticated]);
 
   // Accounts CRUD
   const saveAccountMutation = () => {
     if (!accountForm.name.trim()) return;
-    const newAccounts = [...db.accounts];
+    const currentDb = dbRef.current || db;
+    const newAccounts = [...currentDb.accounts];
     if (accountForm.editId) {
       const idx = newAccounts.findIndex(a => a.id === accountForm.editId);
       if (idx !== -1) {
@@ -1573,27 +1637,29 @@ export default function App() {
         includeInDashboard: accountForm.include
       });
     }
-    const updated = { ...db, accounts: newAccounts };
+    const updated = { ...currentDb, accounts: newAccounts };
     saveDatabaseState(updated);
     setAccountForm({ open: false, editId: null, name: '', currency: Currency.EUR, include: true });
   };
 
   const deleteAccountMutation = (id: string) => {
-    const freshAccounts = db.accounts.filter(a => a.id !== id);
+    const currentDb = dbRef.current || db;
+    const freshAccounts = currentDb.accounts.filter(a => a.id !== id);
     // Cascade delete linked portfolios & transactions
-    const linkedPorts = db.portfolios.filter(p => p.accountId === id);
+    const linkedPorts = currentDb.portfolios.filter(p => p.accountId === id);
     const linkedPortIds = linkedPorts.map(p => p.id);
-    const freshPortfolios = db.portfolios.filter(p => p.accountId !== id);
-    const freshTx = db.transactions.filter(t => !linkedPortIds.includes(t.portfolioId));
+    const freshPortfolios = currentDb.portfolios.filter(p => p.accountId !== id);
+    const freshTx = currentDb.transactions.filter(t => !linkedPortIds.includes(t.portfolioId));
 
-    const updated = { ...db, accounts: freshAccounts, portfolios: freshPortfolios, transactions: freshTx };
+    const updated = { ...currentDb, accounts: freshAccounts, portfolios: freshPortfolios, transactions: freshTx };
     saveDatabaseState(updated);
   };
 
   // Portfolios CRUD
   const savePortfolioMutation = () => {
     if (!portfolioForm.name.trim() || !portfolioForm.accountId) return;
-    const newPorts = [...db.portfolios];
+    const currentDb = dbRef.current || db;
+    const newPorts = [...currentDb.portfolios];
     if (portfolioForm.editId) {
       const idx = newPorts.findIndex(p => p.id === portfolioForm.editId);
       if (idx !== -1) {
@@ -1612,15 +1678,16 @@ export default function App() {
         includeInDashboard: portfolioForm.include
       });
     }
-    const updated = { ...db, portfolios: newPorts };
+    const updated = { ...currentDb, portfolios: newPorts };
     saveDatabaseState(updated);
     setPortfolioForm({ open: false, editId: null, accountId: '', name: '', include: true });
   };
 
   const deletePortfolioMutation = (id: string) => {
-    const freshPorts = db.portfolios.filter(p => p.id !== id);
-    const freshTx = db.transactions.filter(t => t.portfolioId !== id);
-    const updated = { ...db, portfolios: freshPorts, transactions: freshTx };
+    const currentDb = dbRef.current || db;
+    const freshPorts = currentDb.portfolios.filter(p => p.id !== id);
+    const freshTx = currentDb.transactions.filter(t => t.portfolioId !== id);
+    const updated = { ...currentDb, portfolios: freshPorts, transactions: freshTx };
     saveDatabaseState(updated);
   };
 
@@ -1725,11 +1792,12 @@ export default function App() {
       return;
     }
     
-    let updatedTxList = [...db.transactions];
+    const currentDb = dbRef.current || db;
+    let updatedTxList = [...currentDb.transactions];
     
     if (txForm.editId) {
       // Edit mode
-      updatedTxList = db.transactions.map((t) => {
+      updatedTxList = currentDb.transactions.map((t) => {
         if (t.id === txForm.editId) {
           return {
             ...t,
@@ -1765,7 +1833,7 @@ export default function App() {
       updatedTxList.push(newTx);
     }
 
-    const updated = { ...db, transactions: updatedTxList };
+    const updated = { ...currentDb, transactions: updatedTxList };
     saveDatabaseState(updated);
     
     // Close & Trigger Prices Retrieval
@@ -1774,14 +1842,15 @@ export default function App() {
   };
 
   const deleteTransactionMutation = (id: string) => {
-    const txToDelete = db.transactions.find(t => t.id === id);
+    const currentDb = dbRef.current || db;
+    const txToDelete = currentDb.transactions.find(t => t.id === id);
     let idsToDelete = [id];
     let transferIdsToDelete: string[] = [];
 
     if (txToDelete) {
       if (txToDelete.transferId) {
         transferIdsToDelete.push(txToDelete.transferId);
-        db.transactions.forEach(t => {
+        currentDb.transactions.forEach(t => {
           if (t.transferId === txToDelete.transferId) {
             idsToDelete.push(t.id);
           }
@@ -1791,24 +1860,25 @@ export default function App() {
       if (txToDelete.transferOutTransactionId) idsToDelete.push(txToDelete.transferOutTransactionId);
     }
 
-    const freshTx = db.transactions.filter(t => !idsToDelete.includes(t.id));
-    const freshTransfers = (db.transfers || []).filter(tr =>
+    const freshTx = currentDb.transactions.filter(t => !idsToDelete.includes(t.id));
+    const freshTransfers = (currentDb.transfers || []).filter(tr =>
       !transferIdsToDelete.includes(tr.id) &&
       !idsToDelete.includes(tr.id) &&
       !idsToDelete.includes(tr.transferOutTransactionId || '') &&
       !idsToDelete.includes(tr.transferInTransactionId || '')
     );
-    const updated = { ...db, transactions: freshTx, transfers: freshTransfers };
+    const updated = { ...currentDb, transactions: freshTx, transfers: freshTransfers };
     saveDatabaseState(updated);
   };
 
   const deleteTransferMutation = (transferId: string) => {
-    const transfer = (db.transfers || []).find(t => t.id === transferId);
+    const currentDb = dbRef.current || db;
+    const transfer = (currentDb.transfers || []).find(t => t.id === transferId);
     let txOutId = transfer?.transferOutTransactionId;
     let txInId = transfer?.transferInTransactionId;
 
     if (!transfer) {
-      const tx = db.transactions.find(t => t.id === transferId);
+      const tx = currentDb.transactions.find(t => t.id === transferId);
       if (tx) {
         if (tx.type === TransactionType.TRANSFER_OUT) {
           txOutId = tx.id;
@@ -1820,56 +1890,18 @@ export default function App() {
       }
     }
 
-    const freshTransfers = (db.transfers || []).filter(t => t.id !== transferId && (txOutId ? t.transferOutTransactionId !== txOutId : true));
-    const freshTx = db.transactions.filter(t =>
+    const freshTransfers = (currentDb.transfers || []).filter(t => t.id !== transferId && (txOutId ? t.transferOutTransactionId !== txOutId : true));
+    const freshTx = currentDb.transactions.filter(t =>
       (txOutId ? t.id !== txOutId : true) &&
       (txInId ? t.id !== txInId : true) &&
       t.transferId !== transferId
     );
-    const updated = { ...db, transactions: freshTx, transfers: freshTransfers };
+    const updated = { ...currentDb, transactions: freshTx, transfers: freshTransfers };
     saveDatabaseState(updated);
   };
 
   const getAvailableLots = (symbol: string, portfolioId: string, excludeTransferId?: string | null) => {
-    const validTx = excludeTransferId
-      ? db.transactions.filter(t => t.transferId !== excludeTransferId && t.id !== excludeTransferId)
-      : db.transactions;
-
-    // 1. Get all incoming transactions
-    const incoming = validTx
-      .filter(tx => tx.portfolioId === portfolioId && tx.symbol.toUpperCase() === symbol.toUpperCase() && (tx.type === TransactionType.BUY || tx.type === TransactionType.TRANSFER_IN))
-      .sort((a, b) => new Date(a.date).getTime() - new Date(b.date).getTime())
-      .map(tx => ({
-        id: tx.id,
-        date: tx.date,
-        price: tx.type === TransactionType.TRANSFER_IN ? (tx.originalBuyPrice ?? tx.price) : tx.price,
-        originalBuyDate: tx.type === TransactionType.TRANSFER_IN ? (tx.originalBuyDate ?? tx.date) : tx.date,
-        qty: tx.qty,
-        availableQty: tx.qty,
-        currency: tx.currency
-      }));
-
-    // 2. Get all outgoing transactions
-    const outgoing = validTx
-      .filter(tx => tx.portfolioId === portfolioId && tx.symbol.toUpperCase() === symbol.toUpperCase() && (tx.type === TransactionType.SELL || tx.type === TransactionType.TRANSFER_OUT))
-      .sort((a, b) => new Date(a.date).getTime() - new Date(b.date).getTime());
-
-    // 3. Deplete incoming lots using outgoing flows (FIFO standard depletion)
-    outgoing.forEach(out => {
-      let outQty = out.qty;
-      for (let i = 0; i < incoming.length; i++) {
-        if (outQty <= 0) break;
-        const lot = incoming[i];
-        if (lot.availableQty > 0) {
-          const drain = Math.min(lot.availableQty, outQty);
-          lot.availableQty -= drain;
-          outQty -= drain;
-        }
-      }
-    });
-
-    // 4. Return lots with available qty > 1e-8
-    return incoming.filter(lot => lot.availableQty > 1e-8);
+    return getAvailableLotsForTransfer(db.transactions, symbol, portfolioId, excludeTransferId);
   };
 
   const getAvailableTickersForSource = (srcPortId: string): string[] => {
@@ -1926,13 +1958,15 @@ export default function App() {
       priceCurrency,
       sourceCommission,
       sourceCommissionCurrency,
+      sourceCommissionPaymentMode,
       destCommission,
       destCommissionCurrency,
+      destCommissionPaymentMode,
       notes
     } = transferForm;
 
     const parsedQty = Number(qty);
-    const parsedPrice = price !== '' && price !== undefined ? Number(price) : 0;
+    const parsedPrice = price !== '' && price !== undefined ? Number(price) : undefined;
     const parsedSourceCommission = sourceCommission !== '' && sourceCommission !== undefined ? Number(sourceCommission) : 0;
     const parsedDestCommission = destCommission !== '' && destCommission !== undefined ? Number(destCommission) : 0;
 
@@ -1953,136 +1987,69 @@ export default function App() {
     const sourceCurr = sourceAcc?.currency || db.settings.defaultCurrency || 'EUR';
     const destCurr = destAcc?.currency || db.settings.defaultCurrency || 'EUR';
 
-    // Check available lots in source portfolio (excluding current transfer lots if editing)
-    const availableLots = getAvailableLots(symbol, sourcePortfolioId, editTransferId);
-    const totalAvailable = availableLots.reduce((sum, lot) => sum + lot.availableQty, 0);
-
-    if (parsedQty > totalAvailable + 1e-7) {
-      setFormErr(t.insufficientQtyError || 'Quantità richiesta superiore alle quote disponibili.');
-      return;
-    }
-
-    // Sort lots according to chosen criteria (FIFO or LIFO)
-    const sortedLots = [...availableLots].sort((a, b) => {
-      const timeA = new Date(a.date).getTime();
-      const timeB = new Date(b.date).getTime();
-      return criteria === 'FIFO' ? timeA - timeB : timeB - timeA;
-    });
-
-    const transferId = editTransferId || ('tr-' + Math.random().toString(36).substring(2, 9));
-    let remainingToTransfer = parsedQty;
-    const newTransactions: Transaction[] = [];
-
-    for (let i = 0; i < sortedLots.length; i++) {
-      if (remainingToTransfer <= 0) break;
-      const lot = sortedLots[i];
-      const qtyToTake = Math.min(lot.availableQty, remainingToTransfer);
-      remainingToTransfer -= qtyToTake;
-
-      const txOutId = 'tx-' + Math.random().toString(36).substring(2, 9);
-      const txInId = 'tx-' + Math.random().toString(36).substring(2, 9);
-
-      const isFirst = newTransactions.length === 0;
-      const chunkSourceComm = isFirst ? parsedSourceCommission : 0;
-      const chunkDestComm = isFirst ? parsedDestCommission : 0;
-
-      const txOut: Transaction = {
-        id: txOutId,
-        transferId: transferId,
-        portfolioId: sourcePortfolioId,
-        date: date || new Date().toISOString(),
-        type: TransactionType.TRANSFER_OUT,
+    try {
+      const currentDb = dbRef.current || db;
+      const { newTransactions, singleTransfer } = executeTransferTransactionPair({
+        allTransactions: currentDb.transactions,
+        editTransferId,
+        sourcePortfolioId,
+        destPortfolioId,
         symbol: symbol.toUpperCase().trim(),
-        qty: qtyToTake,
-        price: Number(parsedPrice > 0 ? parsedPrice : lot.price),
-        commission: chunkSourceComm,
-        currency: priceCurrency || lot.currency || sourceCurr,
-        commissionCurrency: sourceCommissionCurrency || sourceCurr,
-        notes: notes || '',
-        parentTransactionId: lot.id,
-        transferInTransactionId: txInId,
-        originalBuyPrice: lot.price,
-        originalBuyDate: lot.originalBuyDate,
-        transferCriteria: criteria
-      };
-
-      const txIn: Transaction = {
-        id: txInId,
-        transferId: transferId,
-        portfolioId: destPortfolioId,
+        qty: parsedQty,
         date: date || new Date().toISOString(),
-        type: TransactionType.TRANSFER_IN,
-        symbol: symbol.toUpperCase().trim(),
-        qty: qtyToTake,
-        price: Number(parsedPrice > 0 ? parsedPrice : lot.price),
-        commission: chunkDestComm,
-        currency: priceCurrency || lot.currency || destCurr,
-        commissionCurrency: destCommissionCurrency || destCurr,
+        criteria,
+        price: parsedPrice,
+        priceCurrency: priceCurrency || sourceCurr,
+        sourceCommission: parsedSourceCommission,
+        sourceCommissionCurrency: sourceCommissionCurrency || sourceCurr,
+        sourceCommissionPaymentMode: sourceCommissionPaymentMode || 'EXTERNAL',
+        destCommission: parsedDestCommission,
+        destCommissionCurrency: destCommissionCurrency || destCurr,
+        destCommissionPaymentMode: destCommissionPaymentMode || 'EXTERNAL',
         notes: notes || '',
-        parentTransactionId: lot.id,
-        transferOutTransactionId: txOutId,
-        originalBuyPrice: lot.price,
-        originalBuyDate: lot.originalBuyDate,
-        transferCriteria: criteria
-      };
+        sourceCurr,
+        destCurr
+      });
 
-      newTransactions.push(txOut, txIn);
+      // Filter out old child transactions if editing
+      const baseTxList = editTransferId
+        ? currentDb.transactions.filter(t => t.transferId !== editTransferId && t.id !== editTransferId)
+        : currentDb.transactions;
+      const updatedTxList = [...baseTxList, ...newTransactions];
+
+      // Update transfers array: exactly 1 Transfer record for this operation
+      const baseTransferList = editTransferId
+        ? (currentDb.transfers || []).filter(tr => tr.id !== editTransferId)
+        : (currentDb.transfers || []);
+      const updatedTransferList = [...baseTransferList, singleTransfer];
+
+      const updated: DBState = { ...currentDb, transactions: updatedTxList, transfers: updatedTransferList };
+      saveDatabaseState(updated);
+
+      // Reset Form
+      setTransferForm({
+        open: false,
+        editTransferId: null,
+        sourcePortfolioId: '',
+        destPortfolioId: '',
+        symbol: '',
+        qty: '',
+        price: '',
+        priceCurrency: 'EUR',
+        sourceCommission: '',
+        sourceCommissionCurrency: 'EUR',
+        sourceCommissionPaymentMode: 'EXTERNAL',
+        destCommission: '',
+        destCommissionCurrency: 'EUR',
+        destCommissionPaymentMode: 'EXTERNAL',
+        criteria: 'FIFO',
+        date: new Date().toISOString().slice(0, 16),
+        notes: ''
+      });
+      triggerPriceSync(updated);
+    } catch (err: any) {
+      setFormErr(err.message || 'Errore durante il salvataggio del trasferimento.');
     }
-
-    // EXACTLY 1 Transfer entity created / updated for this operation
-    const singleTransfer: Transfer = {
-      id: transferId,
-      date: date || new Date().toISOString(),
-      symbol: symbol.toUpperCase().trim(),
-      qty: parsedQty,
-      price: parsedPrice > 0 ? parsedPrice : undefined,
-      priceCurrency: priceCurrency || sourceCurr,
-      sourcePortfolioId,
-      destPortfolioId,
-      sourceCommission: parsedSourceCommission,
-      sourceCommissionCurrency: sourceCommissionCurrency || sourceCurr,
-      destCommission: parsedDestCommission,
-      destCommissionCurrency: destCommissionCurrency || destCurr,
-      criteria,
-      notes: notes || '',
-      childTransactionIds: newTransactions.map(t => t.id)
-    };
-
-    // Filter out old child transactions if editing
-    const baseTxList = editTransferId
-      ? db.transactions.filter(t => t.transferId !== editTransferId && t.id !== editTransferId)
-      : db.transactions;
-    const updatedTxList = [...baseTxList, ...newTransactions];
-
-    // Update transfers array: exactly 1 Transfer record for this operation
-    const baseTransferList = editTransferId
-      ? (db.transfers || []).filter(tr => tr.id !== editTransferId)
-      : (db.transfers || []);
-    const updatedTransferList = [...baseTransferList, singleTransfer];
-
-    const updated: DBState = { ...db, transactions: updatedTxList, transfers: updatedTransferList };
-    saveDatabaseState(updated);
-
-    // Reset Form
-    setTransferForm({
-      open: false,
-      editTransferId: null,
-      sourcePortfolioId: '',
-      destPortfolioId: '',
-      symbol: '',
-      qty: '',
-      price: '',
-      priceCurrency: 'EUR',
-      sourceCommission: '',
-      sourceCommissionCurrency: 'EUR',
-      destCommission: '',
-      destCommissionCurrency: 'EUR',
-      date: new Date().toISOString().substring(0, 16),
-      criteria: 'FIFO',
-      notes: ''
-    });
-
-    triggerPriceSync(updated);
   };
 
   const getTransferPeerInfo = (tx: Transaction) => {
@@ -2099,14 +2066,32 @@ export default function App() {
     return null;
   };
 
+  const allActiveLotsMap = useMemo(() => {
+    const allPortIds = db.portfolios.map(p => p.id);
+    const { activeLots } = calculateHoldingsAndLots(db.transactions, allPortIds, convertValue, selectedCurrency);
+    const map = new Map<string, number>();
+    activeLots.forEach(l => {
+      map.set(l.id, l.remainingQty);
+    });
+    return map;
+  }, [db.transactions, db.portfolios, convertValue, selectedCurrency]);
+
   const getLotStatus = (tx: Transaction) => {
     if (tx.type !== TransactionType.BUY && tx.type !== TransactionType.TRANSFER_IN) return null;
     const outgoingMatches = db.transactions.filter(out => out.parentTransactionId === tx.id && out.type === TransactionType.TRANSFER_OUT);
-    const totalDepleted = outgoingMatches.reduce((sum, out) => sum + out.qty, 0);
+    const totalTransferred = outgoingMatches.reduce((sum, out) => sum + out.qty, 0);
 
-    if (totalDepleted <= 0) return { status: 'OPEN', depleted: 0, remaining: tx.qty };
-    if (totalDepleted >= tx.qty - 1e-7) return { status: 'FULLY_TRANSFERRED', depleted: totalDepleted, remaining: 0 };
-    return { status: 'PARTIALLY_TRANSFERRED', depleted: totalDepleted, remaining: tx.qty - totalDepleted };
+    // If no outgoing transfers occurred from this lot, do not display transfer badge
+    if (totalTransferred <= 1e-12) return null;
+
+    // Remaining open shares for this lot in its portfolio (accounting for both sales and transfers)
+    const remainingInPortfolio = allActiveLotsMap.get(tx.id) ?? 0;
+
+    // If no shares of this lot remain open in the portfolio, all available shares were transferred
+    if (remainingInPortfolio <= 1e-8) {
+      return { status: 'FULLY_TRANSFERRED', depleted: totalTransferred, remaining: 0 };
+    }
+    return { status: 'PARTIALLY_TRANSFERRED', depleted: totalTransferred, remaining: remainingInPortfolio };
   };
 
   const getTransferRecords = (): TransferRecord[] => {
@@ -2140,8 +2125,10 @@ export default function App() {
         destBrokerName: dstBroker?.name || '',
         sourceCommission: tr.sourceCommission || 0,
         sourceCommissionCurrency: tr.sourceCommissionCurrency || tr.priceCurrency || 'EUR',
+        sourceCommissionPaymentMode: tr.sourceCommissionPaymentMode || 'EXTERNAL',
         destCommission: tr.destCommission || 0,
         destCommissionCurrency: tr.destCommissionCurrency || tr.priceCurrency || 'EUR',
+        destCommissionPaymentMode: tr.destCommissionPaymentMode || 'EXTERNAL',
         criteria: tr.criteria || 'FIFO',
         notes: tr.notes || '',
         childCount: childCount > 0 ? childCount : 1,
@@ -2159,7 +2146,8 @@ export default function App() {
   // Other Costs CRUD
   const saveCostMutation = () => {
     if (!costForm.amount || !costForm.portfolioId || !costForm.date) return;
-    const currentCosts = db.otherCosts || [];
+    const currentDb = dbRef.current || db;
+    const currentCosts = currentDb.otherCosts || [];
     let updatedCostsList = [...currentCosts];
 
     if (costForm.editId) {
@@ -2190,15 +2178,16 @@ export default function App() {
       updatedCostsList.push(newCost);
     }
 
-    const updated = { ...db, otherCosts: updatedCostsList };
+    const updated = { ...currentDb, otherCosts: updatedCostsList };
     saveDatabaseState(updated);
     setCostForm({ open: false, editId: null, portfolioId: '', date: '', amount: 0, currency: 'EUR', type: 'bollo', notes: '' });
   };
 
   const deleteCostMutation = (id: string) => {
-    const currentCosts = db.otherCosts || [];
+    const currentDb = dbRef.current || db;
+    const currentCosts = currentDb.otherCosts || [];
     const freshCosts = currentCosts.filter(c => c.id !== id);
-    const updated = { ...db, otherCosts: freshCosts };
+    const updated = { ...currentDb, otherCosts: freshCosts };
     saveDatabaseState(updated);
   };
 
@@ -2233,6 +2222,8 @@ export default function App() {
     if (tx.type === TransactionType.TRANSFER_IN || tx.type === TransactionType.TRANSFER_OUT) {
       const parentTransfer = (db.transfers || []).find(tr => tr.id === tx.transferId);
       if (parentTransfer) {
+        const srcMode = parentTransfer.sourceCommissionPaymentMode || 'EXTERNAL';
+        const dstMode = parentTransfer.destCommissionPaymentMode || 'EXTERNAL';
         setTransferForm({
           open: true,
           editTransferId: parentTransfer.id,
@@ -2240,12 +2231,14 @@ export default function App() {
           destPortfolioId: parentTransfer.destPortfolioId,
           symbol: parentTransfer.symbol,
           qty: parentTransfer.qty.toString(),
-          price: parentTransfer.price ? parentTransfer.price.toString() : '',
+          price: parentTransfer.price !== undefined ? parentTransfer.price.toString() : '',
           priceCurrency: parentTransfer.priceCurrency || 'EUR',
-          sourceCommission: parentTransfer.sourceCommission ? parentTransfer.sourceCommission.toString() : '',
-          sourceCommissionCurrency: parentTransfer.sourceCommissionCurrency || 'EUR',
-          destCommission: parentTransfer.destCommission ? parentTransfer.destCommission.toString() : '',
-          destCommissionCurrency: parentTransfer.destCommissionCurrency || 'EUR',
+          sourceCommission: parentTransfer.sourceCommission !== undefined ? parentTransfer.sourceCommission.toString() : '',
+          sourceCommissionCurrency: srcMode === 'ASSET' ? (parentTransfer.symbol || 'ASSET') : (parentTransfer.sourceCommissionCurrency || 'EUR'),
+          sourceCommissionPaymentMode: srcMode,
+          destCommission: parentTransfer.destCommission !== undefined ? parentTransfer.destCommission.toString() : '',
+          destCommissionCurrency: dstMode === 'ASSET' ? (parentTransfer.symbol || 'ASSET') : (parentTransfer.destCommissionCurrency || 'EUR'),
+          destCommissionPaymentMode: dstMode,
           date: parentTransfer.date.substring(0, 16),
           criteria: parentTransfer.criteria || 'FIFO',
           notes: parentTransfer.notes || ''
@@ -2269,6 +2262,9 @@ export default function App() {
       const destPort = db.portfolios.find(p => p.id === txIn.portfolioId);
       const destAcc = destPort ? db.accounts.find(a => a.id === destPort.accountId) : null;
 
+      const sourceMode = txOut.commissionPaymentMode || (txOut.commissionCurrency && txOut.commissionCurrency.toUpperCase() === txOut.symbol.toUpperCase() ? 'ASSET' : 'EXTERNAL');
+      const destMode = txIn.commissionPaymentMode || (txIn.commissionCurrency && txIn.commissionCurrency.toUpperCase() === txIn.symbol.toUpperCase() ? 'ASSET' : 'EXTERNAL');
+
       setTransferForm({
         open: true,
         editTransferId: txOut.transferId || txOut.id,
@@ -2276,12 +2272,14 @@ export default function App() {
         destPortfolioId: txIn.portfolioId,
         symbol: txOut.symbol,
         qty: txOut.qty.toString(),
-        price: txOut.price ? txOut.price.toString() : '',
+        price: txOut.price !== undefined ? txOut.price.toString() : '',
         priceCurrency: txOut.currency || sourceAcc?.currency || db.settings.defaultCurrency || 'EUR',
-        sourceCommission: txOut.commission ? txOut.commission.toString() : '',
-        sourceCommissionCurrency: txOut.commissionCurrency || sourceAcc?.currency || db.settings.defaultCurrency || 'EUR',
-        destCommission: txIn.commission ? txIn.commission.toString() : '',
-        destCommissionCurrency: txIn.commissionCurrency || destAcc?.currency || db.settings.defaultCurrency || 'EUR',
+        sourceCommission: txOut.commission !== undefined ? txOut.commission.toString() : '',
+        sourceCommissionCurrency: sourceMode === 'ASSET' ? txOut.symbol : (txOut.commissionCurrency || sourceAcc?.currency || db.settings.defaultCurrency || 'EUR'),
+        sourceCommissionPaymentMode: sourceMode,
+        destCommission: txIn.commission !== undefined ? txIn.commission.toString() : '',
+        destCommissionCurrency: destMode === 'ASSET' ? txIn.symbol : (txIn.commissionCurrency || destAcc?.currency || db.settings.defaultCurrency || 'EUR'),
+        destCommissionPaymentMode: destMode,
         date: txOut.date.substring(0, 16),
         criteria: txOut.transferCriteria || 'FIFO',
         notes: txOut.notes || ''
@@ -2310,11 +2308,68 @@ export default function App() {
     const currentTransfers = db.transfers || [];
     const currentTransactions = db.transactions || [];
     const newTransfers = [...currentTransfers];
-    const newTransactions = [...currentTransactions];
+    let newTransactions = [...currentTransactions];
 
     importedTransfers.forEach((tr) => {
-      if (!newTransfers.some(ex => ex.id === tr.id)) {
+      let existingTr = newTransfers.find(ex => ex.id === tr.id);
+      if (!existingTr) {
         newTransfers.push(tr);
+        existingTr = tr;
+      }
+
+      // Check if child transactions already exist for this transfer entity
+      const hasChildTx = newTransactions.some(t => t.transferId === tr.id);
+      if (!hasChildTx) {
+        const srcMode = tr.sourceCommissionPaymentMode || 'EXTERNAL';
+        const dstMode = tr.destCommissionPaymentMode || 'EXTERNAL';
+        const txOutId = 'tx-' + Math.random().toString(36).substring(2, 9);
+        const txInId = 'tx-' + Math.random().toString(36).substring(2, 9);
+
+        const srcComm = tr.sourceCommission || 0;
+        const dstComm = tr.destCommission || 0;
+        const srcAssetFee = srcMode === 'ASSET' ? srcComm : 0;
+        const dstAssetFee = dstMode === 'ASSET' ? dstComm : 0;
+        const totalAssetFee = srcAssetFee + dstAssetFee;
+
+        const qtyIn = Math.max(0, tr.qty - totalAssetFee);
+
+        const txOut: Transaction = {
+          id: txOutId,
+          transferId: tr.id,
+          portfolioId: tr.sourcePortfolioId,
+          date: tr.date,
+          type: TransactionType.TRANSFER_OUT,
+          symbol: tr.symbol.toUpperCase().trim(),
+          qty: tr.qty,
+          price: tr.price || 0,
+          commission: srcComm,
+          commissionPaymentMode: srcMode,
+          currency: tr.priceCurrency || 'EUR',
+          commissionCurrency: srcMode === 'ASSET' ? tr.symbol.toUpperCase().trim() : (tr.sourceCommissionCurrency || 'EUR'),
+          notes: tr.notes || '',
+          transferInTransactionId: txInId,
+          transferCriteria: tr.criteria || 'FIFO'
+        };
+
+        const txIn: Transaction = {
+          id: txInId,
+          transferId: tr.id,
+          portfolioId: tr.destPortfolioId,
+          date: tr.date,
+          type: TransactionType.TRANSFER_IN,
+          symbol: tr.symbol.toUpperCase().trim(),
+          qty: qtyIn,
+          price: tr.price || 0,
+          commission: dstComm,
+          commissionPaymentMode: dstMode,
+          currency: tr.priceCurrency || 'EUR',
+          commissionCurrency: dstMode === 'ASSET' ? tr.symbol.toUpperCase().trim() : (tr.destCommissionCurrency || 'EUR'),
+          notes: tr.notes || '',
+          transferOutTransactionId: txOutId,
+          transferCriteria: tr.criteria || 'FIFO'
+        };
+
+        newTransactions.push(txOut, txIn);
       }
     });
 
@@ -2324,7 +2379,6 @@ export default function App() {
       transactions: newTransactions
     };
 
-    setDb(updatedDb);
     saveDatabaseState(updatedDb);
   };
 
@@ -2390,8 +2444,10 @@ export default function App() {
       priceCurrency: srcCurr,
       sourceCommission: '',
       sourceCommissionCurrency: srcCurr,
+      sourceCommissionPaymentMode: 'EXTERNAL',
       destCommission: '',
       destCommissionCurrency: destCurr,
+      destCommissionPaymentMode: 'EXTERNAL',
       date: new Date().toISOString().substring(0, 16),
       criteria: 'FIFO',
       notes: ''
@@ -2409,8 +2465,10 @@ export default function App() {
     const destPortfolioId = tr?.destPortfolioId || rec.destPortfolioId;
     const sourceCommission = tr?.sourceCommission !== undefined ? tr.sourceCommission.toString() : (rec.sourceCommission !== undefined ? rec.sourceCommission.toString() : '');
     const sourceCommissionCurrency = tr?.sourceCommissionCurrency || rec.sourceCommissionCurrency || 'EUR';
+    const sourceCommissionPaymentMode = tr?.sourceCommissionPaymentMode || rec.sourceCommissionPaymentMode || 'EXTERNAL';
     const destCommission = tr?.destCommission !== undefined ? tr.destCommission.toString() : (rec.destCommission !== undefined ? rec.destCommission.toString() : '');
     const destCommissionCurrency = tr?.destCommissionCurrency || rec.destCommissionCurrency || 'EUR';
+    const destCommissionPaymentMode = tr?.destCommissionPaymentMode || rec.destCommissionPaymentMode || 'EXTERNAL';
     const date = (tr?.date || rec.date).substring(0, 16);
     const criteria = tr?.criteria || rec.criteria || 'FIFO';
     const notes = tr?.notes || rec.notes || '';
@@ -2426,8 +2484,10 @@ export default function App() {
       priceCurrency,
       sourceCommission,
       sourceCommissionCurrency,
+      sourceCommissionPaymentMode,
       destCommission,
       destCommissionCurrency,
+      destCommissionPaymentMode,
       date,
       criteria,
       notes
@@ -2473,38 +2533,48 @@ export default function App() {
   const renderDeletionConfirmModal = () => {
     if (!deleteConfirm.open) return null;
     return (
-      <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-950/80 backdrop-blur-md animate-fade-in" dir={lang === 'ar' ? 'rtl' : 'ltr'}>
-        <div className="max-w-md w-full bg-[#0d1527] border border-rose-500/30 rounded-2xl p-6 shadow-2xl relative overflow-hidden flex flex-col">
-          <div className="absolute top-0 right-0 w-32 h-32 bg-rose-500/5 rounded-full blur-2xl pointer-events-none"></div>
-          
-          <div className="flex items-start gap-4 mb-5">
-            <span className="p-3 bg-rose-500/10 rounded-xl text-rose-400 border border-rose-500/20 shrink-0">
-              <Trash2 className="w-6 h-6 animate-pulse" />
-            </span>
-            <div className="flex-1">
-              <h3 className="text-lg font-black text-white">{t.confirmDeleteTitle}</h3>
-              <p className="text-sm text-slate-300 mt-2 font-medium leading-relaxed">{deleteConfirm.message}</p>
+      <ModalPortal isOpen={deleteConfirm.open}>
+        <div
+          className="fixed inset-0 z-50 flex items-center justify-center p-3 sm:p-4 bg-slate-950/80 backdrop-blur-md overflow-hidden animate-fade-in"
+          dir={lang === 'ar' ? 'rtl' : 'ltr'}
+          onClick={(e) => {
+            if (e.target === e.currentTarget) {
+              setDeleteConfirm({ ...deleteConfirm, open: false });
+            }
+          }}
+        >
+          <div className="max-w-md w-full bg-[#0d1527] border border-rose-500/30 rounded-2xl p-6 shadow-2xl relative overflow-hidden flex flex-col max-h-[calc(100vh-2rem)] my-auto">
+            <div className="absolute top-0 right-0 w-32 h-32 bg-rose-500/5 rounded-full blur-2xl pointer-events-none"></div>
+            
+            <div className="flex items-start gap-4 mb-5 overflow-y-auto custom-scrollbar pr-1 flex-1 min-h-0">
+              <span className="p-3 bg-rose-500/10 rounded-xl text-rose-400 border border-rose-500/20 shrink-0">
+                <Trash2 className="w-6 h-6 animate-pulse" />
+              </span>
+              <div className="flex-1">
+                <h3 className="text-lg font-black text-white">{t.confirmDeleteTitle}</h3>
+                <p className="text-sm text-slate-300 mt-2 font-medium leading-relaxed">{deleteConfirm.message}</p>
+              </div>
+            </div>
+            
+            <div className="flex items-center justify-end gap-3 pt-3 border-t border-slate-800/80 shrink-0">
+              <button
+                type="button"
+                onClick={() => setDeleteConfirm({ ...deleteConfirm, open: false })}
+                className="px-4 py-2 text-xs font-bold text-slate-400 hover:text-white bg-slate-900 border border-slate-800 hover:border-slate-700 rounded-xl transition-all cursor-pointer"
+              >
+                {t.cancelBtn}
+              </button>
+              <button
+                type="button"
+                onClick={handleConfirmDelete}
+                className="px-5 py-2 text-xs font-black text-white bg-rose-600 hover:bg-rose-500 active:bg-rose-700 rounded-xl transition-all shadow-[0_0_15px_rgba(239,68,68,0.2)] cursor-pointer"
+              >
+                {t.confirmBtn}
+              </button>
             </div>
           </div>
-          
-          <div className="flex items-center justify-end gap-3 pt-3 border-t border-slate-800/80">
-            <button
-              type="button"
-              onClick={() => setDeleteConfirm({ ...deleteConfirm, open: false })}
-              className="px-4 py-2 text-xs font-bold text-slate-400 hover:text-white bg-slate-900 border border-slate-800 hover:border-slate-700 rounded-xl transition-all cursor-pointer"
-            >
-              {t.cancelBtn}
-            </button>
-            <button
-              type="button"
-              onClick={handleConfirmDelete}
-              className="px-5 py-2 text-xs font-black text-white bg-rose-600 hover:bg-rose-500 active:bg-rose-700 rounded-xl transition-all shadow-[0_0_15px_rgba(239,68,68,0.2)] cursor-pointer"
-            >
-              {t.confirmBtn}
-            </button>
-          </div>
         </div>
-      </div>
+      </ModalPortal>
     );
   };
 
@@ -2513,51 +2583,59 @@ export default function App() {
   const renderLegalDisclaimerModal = () => {
     if (!showLegalDisclaimerModal) return null;
     return (
-      <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-[#03050a]/90 backdrop-blur-lg animate-fade-in" dir={lang === 'ar' ? 'rtl' : 'ltr'}>
-        <div className="max-w-2xl w-full bg-[#0a0f1d] border border-rose-500/30 rounded-3xl p-6 sm:p-8 shadow-[0_0_50px_rgba(239,68,68,0.15)] relative overflow-hidden flex flex-col max-h-[90vh]">
-          {/* Ambient decorative warning glows */}
-          <div className="absolute top-0 right-1/4 w-60 h-60 bg-rose-500/5 rounded-full blur-[80px] pointer-events-none"></div>
-          <div className="absolute bottom-0 left-1/4 w-60 h-60 bg-amber-500/5 rounded-full blur-[80px] pointer-events-none"></div>
+      <ModalPortal isOpen={showLegalDisclaimerModal}>
+        <div
+          className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-[#03050a]/90 backdrop-blur-lg overflow-hidden animate-fade-in"
+          dir={lang === 'ar' ? 'rtl' : 'ltr'}
+          onClick={(e) => {
+            if (e.target === e.currentTarget) setShowLegalDisclaimerModal(false);
+          }}
+        >
+          <div className="max-w-2xl w-full bg-[#0a0f1d] border border-rose-500/30 rounded-3xl p-6 sm:p-8 shadow-[0_0_50px_rgba(239,68,68,0.15)] relative overflow-hidden flex flex-col max-h-[calc(100vh-2rem)] sm:max-h-[90vh] my-auto">
+            {/* Ambient decorative warning glows */}
+            <div className="absolute top-0 right-1/4 w-60 h-60 bg-rose-500/5 rounded-full blur-[80px] pointer-events-none"></div>
+            <div className="absolute bottom-0 left-1/4 w-60 h-60 bg-amber-500/5 rounded-full blur-[80px] pointer-events-none"></div>
 
-          {/* Header with high prominence law scale / warning icon */}
-          <div className="flex items-center gap-3.5 border-b border-slate-800/80 pb-4 mb-5">
-            <span className="p-2.5 bg-rose-500/10 rounded-2xl text-rose-400 border border-rose-500/20 shadow-inner">
-              <Scale className="w-6 h-6 animate-pulse" />
-            </span>
-            <div>
-              <h2 className="font-extrabold text-sm sm:text-base text-white tracking-tight">{t.disclaimerTitle}</h2>
-              <span className="text-[9px] font-mono font-black text-rose-400 uppercase tracking-widest block mt-0.5">jurisdictions: US, UK, IT, INT &bull; active protection</span>
-            </div>
-          </div>
-
-          {/* Content containing legal terms */}
-          <div className="flex-1 overflow-y-auto space-y-4 pr-3 text-xs sm:text-sm text-slate-300 leading-relaxed custom-scrollbar pb-3">
-            <div className="p-4 bg-rose-500/5 border border-rose-500/10 rounded-2xl font-semibold text-rose-300/95 flex gap-3">
-              <ShieldAlert className="w-5 h-5 flex-shrink-0 text-rose-400 mt-0.5" />
-              <p>{t.disclaimerText1}</p>
-            </div>
-            <div className="p-4 bg-slate-950/60 border border-slate-800 rounded-2xl text-xs space-y-3 leading-relaxed text-slate-400 font-sans">
-              <p>{t.disclaimerText2}</p>
-              <div className="border-t border-slate-800/80 pt-3 flex flex-wrap gap-x-4 gap-y-1 font-mono text-[9px] text-slate-500">
-                <span>&bull; US Law Uniform Disclaimer (Securities Act)</span>
-                <span>&bull; UK Financial Services and Markets Act (FSMA) Sec. 21</span>
-                <span>&bull; Dir. 2014/65/UE Compliance (MiFID II Directive)</span>
-                <span>&bull; Art. 18-20/21-22 del T.U.F. Italiano</span>
+            {/* Header with high prominence law scale / warning icon */}
+            <div className="flex items-center gap-3.5 border-b border-slate-800/80 pb-4 mb-5 shrink-0">
+              <span className="p-2.5 bg-rose-500/10 rounded-2xl text-rose-400 border border-rose-500/20 shadow-inner">
+                <Scale className="w-6 h-6 animate-pulse" />
+              </span>
+              <div>
+                <h2 className="font-extrabold text-sm sm:text-base text-white tracking-tight">{t.disclaimerTitle}</h2>
+                <span className="text-[9px] font-mono font-black text-rose-400 uppercase tracking-widest block mt-0.5">jurisdictions: US, UK, IT, INT &bull; active protection</span>
               </div>
             </div>
-          </div>
 
-          {/* Confirm button */}
-          <div className="pt-4 border-t border-slate-800/80 flex justify-end">
-            <button
-              onClick={() => setShowLegalDisclaimerModal(false)}
-              className="px-6 py-3 bg-gradient-to-r from-rose-600 to-amber-600 hover:from-rose-500 hover:to-amber-500 hover:shadow-[0_0_20px_rgba(239,68,68,0.3)] transition-all duration-300 text-slate-950 font-black rounded-xl text-[10px] sm:text-xs uppercase tracking-wider flex items-center gap-2 cursor-pointer shadow-lg outline-none"
-            >
-              <span>{t.disclaimerAcknowledge}</span>
-            </button>
+            {/* Content containing legal terms */}
+            <div className="flex-1 min-h-0 overflow-y-auto space-y-4 pr-3 text-xs sm:text-sm text-slate-300 leading-relaxed custom-scrollbar pb-3">
+              <div className="p-4 bg-rose-500/5 border border-rose-500/10 rounded-2xl font-semibold text-rose-300/95 flex gap-3">
+                <ShieldAlert className="w-5 h-5 flex-shrink-0 text-rose-400 mt-0.5" />
+                <p>{t.disclaimerText1}</p>
+              </div>
+              <div className="p-4 bg-slate-950/60 border border-slate-800 rounded-2xl text-xs space-y-3 leading-relaxed text-slate-400 font-sans">
+                <p>{t.disclaimerText2}</p>
+                <div className="border-t border-slate-800/80 pt-3 flex flex-wrap gap-x-4 gap-y-1 font-mono text-[9px] text-slate-500">
+                  <span>&bull; US Law Uniform Disclaimer (Securities Act)</span>
+                  <span>&bull; UK Financial Services and Markets Act (FSMA) Sec. 21</span>
+                  <span>&bull; Dir. 2014/65/UE Compliance (MiFID II Directive)</span>
+                  <span>&bull; Art. 18-20/21-22 del T.U.F. Italiano</span>
+                </div>
+              </div>
+            </div>
+
+            {/* Confirm button */}
+            <div className="pt-4 border-t border-slate-800/80 flex justify-end shrink-0">
+              <button
+                onClick={() => setShowLegalDisclaimerModal(false)}
+                className="px-6 py-3 bg-gradient-to-r from-rose-600 to-amber-600 hover:from-rose-500 hover:to-amber-500 hover:shadow-[0_0_20px_rgba(239,68,68,0.3)] transition-all duration-300 text-slate-950 font-black rounded-xl text-[10px] sm:text-xs uppercase tracking-wider flex items-center gap-2 cursor-pointer shadow-lg outline-none"
+              >
+                <span>{t.disclaimerAcknowledge}</span>
+              </button>
+            </div>
           </div>
         </div>
-      </div>
+      </ModalPortal>
     );
   };
 
@@ -3107,7 +3185,6 @@ export default function App() {
       otherCosts: pendingImport.otherCosts || [],
       priceCache: pendingImport.priceCache || {}
     };
-    setDb(newDb);
     saveDatabaseState(newDb);
     setPendingImport(null);
   };
@@ -3176,7 +3253,6 @@ export default function App() {
       });
     }
 
-    setDb(newDb);
     saveDatabaseState(newDb);
     setPendingImport(null);
   };
@@ -3596,7 +3672,7 @@ export default function App() {
                     {dailyChangeAbsolute >= 0 ? '+' : ''}{formatCurrency(dailyChangeAbsolute, selectedCurrency)}
                   </div>
                   <div className={`text-[10px] font-bold font-mono tracking-wider uppercase ${dailyChangeAbsolute >= 0 ? 'text-emerald-500' : 'text-rose-500'}`}>
-                    {dailyChangeAbsolute >= 0 ? '▲' : '▼'} {dailyGainPercentage.toFixed(2)}% {t.yesterdayLabel}
+                    {dailyChangeAbsolute >= 0 ? '▲' : '▼'} {dailyGainPercentage >= 0 ? '+' : ''}{dailyGainPercentage.toFixed(2)}% {t.yesterdayLabel}
                   </div>
                 </div>
               </div>
@@ -3628,22 +3704,74 @@ export default function App() {
                 </div>
               </div>
 
-              {/* Commissions switch bar */}
-              <div className="bg-slate-950/40 p-4 rounded-2xl border border-slate-800/80 flex flex-wrap justify-between items-center gap-4 backdrop-blur-md">
-                <span className="text-xs text-slate-400 font-mono">
-                  {t.calculateCommPerformanceDesc}
-                </span>
-                <button
-                  type="button"
-                  onClick={handleToggleCommissions}
-                  className={`py-1.5 px-3.5 text-xs font-bold rounded-xl border transition-all duration-300 cursor-pointer ${
+              {/* Commissions switch bar - Cognitive Ergonomics Redesign */}
+              <div className="bg-slate-950/40 p-4 rounded-2xl border border-slate-800/80 flex flex-col md:flex-row justify-between items-start md:items-center gap-4 backdrop-blur-md">
+                <div className="flex items-center gap-3">
+                  <div className={`p-2 rounded-xl border transition-all ${
                     includeCommissions
-                      ? 'bg-emerald-500/10 border-emerald-500/30 text-emerald-400 hover:bg-emerald-500/20'
-                      : 'bg-slate-900 border-slate-800 text-slate-400 hover:text-white hover:bg-slate-850'
-                  }`}
+                      ? 'bg-emerald-500/10 border-emerald-500/30 text-emerald-400'
+                      : 'bg-slate-900/80 border-slate-800 text-slate-500'
+                  }`}>
+                    <Coins className="w-4 h-4" />
+                  </div>
+                  <div>
+                    <div className="flex items-center gap-2">
+                      <span className="text-xs font-bold text-slate-200">
+                        {t.commissionLabel || 'Commissioni Broker'}
+                      </span>
+                      <span className={`inline-flex items-center gap-1.5 px-2 py-0.5 rounded-full text-[10px] font-mono font-bold tracking-wide uppercase border transition-all ${
+                        includeCommissions
+                          ? 'bg-emerald-500/15 border-emerald-500/30 text-emerald-300'
+                          : 'bg-slate-900 border-slate-800 text-slate-400'
+                      }`}>
+                        <span className={`w-1.5 h-1.5 rounded-full ${includeCommissions ? 'bg-emerald-400 animate-pulse' : 'bg-slate-500'}`} />
+                        {includeCommissions ? t.includeCommissions : t.excludeCommissions}
+                      </span>
+                    </div>
+                    <p className="text-[11px] text-slate-400 font-mono mt-0.5">
+                      {t.calculateCommPerformanceDesc}
+                    </p>
+                  </div>
+                </div>
+
+                {/* Segmented Control with clear binary choice and zero ambiguity */}
+                <div 
+                  className="bg-slate-900/90 p-1 rounded-xl border border-slate-800 flex items-center shrink-0 self-stretch md:self-auto justify-end shadow-inner"
+                  role="group"
+                  aria-label={t.commissionLabel || 'Calcolo Commissioni'}
                 >
-                  {includeCommissions ? t.includeCommissions : t.excludeCommissions}
-                </button>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      if (includeCommissions) handleToggleCommissions();
+                    }}
+                    className={`flex-1 md:flex-none py-1.5 px-3 text-xs font-bold rounded-lg transition-all duration-200 flex items-center justify-center gap-1.5 cursor-pointer select-none ${
+                      !includeCommissions
+                        ? 'bg-slate-800 text-white shadow-sm border border-slate-700/80'
+                        : 'text-slate-400 hover:text-slate-200 hover:bg-slate-800/40'
+                    }`}
+                    aria-pressed={!includeCommissions}
+                  >
+                    <span className={`w-1.5 h-1.5 rounded-full ${!includeCommissions ? 'bg-amber-400' : 'bg-transparent'}`} />
+                    <span>{t.excludeCommissions}</span>
+                  </button>
+
+                  <button
+                    type="button"
+                    onClick={() => {
+                      if (!includeCommissions) handleToggleCommissions();
+                    }}
+                    className={`flex-1 md:flex-none py-1.5 px-3 text-xs font-bold rounded-lg transition-all duration-200 flex items-center justify-center gap-1.5 cursor-pointer select-none ${
+                      includeCommissions
+                        ? 'bg-emerald-500 text-slate-950 shadow-md font-black border border-emerald-400'
+                        : 'text-slate-400 hover:text-slate-200 hover:bg-slate-800/40'
+                    }`}
+                    aria-pressed={includeCommissions}
+                  >
+                    <span className={`w-1.5 h-1.5 rounded-full ${includeCommissions ? 'bg-slate-950' : 'bg-transparent'}`} />
+                    <span>{t.includeCommissions}</span>
+                  </button>
+                </div>
               </div>
 
               {/* Render Core Chart Board */}
@@ -3726,128 +3854,176 @@ export default function App() {
                 </div>
               </div>
 
-              {/* Account management modals form if open */}
+              {/* Account management modal if open */}
               {accountForm.open && (
-                <div className="bg-slate-900/40 border border-slate-800/80 p-6 rounded-2xl space-y-4 backdrop-blur-md">
-                  <h3 className="font-bold text-sm text-white tracking-wide border-b border-slate-800 pb-2 flex items-center gap-2">
-                    <div className="w-2 h-2 rounded-full bg-emerald-500 animate-pulse"></div>
-                    {accountForm.editId ? t.editAccount : t.addAccount}
-                  </h3>
-                  <div className="grid md:grid-cols-3 gap-4">
-                    <div className="space-y-1.5">
-                      <label className="text-xs text-slate-400 block font-semibold">{t.accountName}</label>
-                      <input
-                        type="text"
-                        value={accountForm.name}
-                        onChange={(e) => setAccountForm({ ...accountForm, name: e.target.value })}
-                        className="bg-slate-950/80 border border-slate-800 focus:outline-none focus:ring-2 focus:ring-emerald-500/20 focus:border-emerald-500/80 px-3 py-2 text-white rounded-xl text-xs w-full transition-all duration-305"
-                        placeholder={t.allOption === 'Tutti' ? 'es. Fineco, Webank, Trade Republic' : t.allOption === 'Todos' ? 'ej. Fineco, Trade Republic, DeGiro' : t.allOption === 'Tous' ? 'ex. BoursoBank, Trade Republic, Interactive Brokers' : t.allOption === '全部' ? '例：华泰证券、富途证券、盈透证券' : t.allOption === 'الكل' ? 'مثال: بينانس، وسيط تفاعلي، هيرميس' : 'e.g. Fineco, Interactive Brokers, Trade Republic'}
-                      />
-                    </div>
+                <ModalPortal isOpen={accountForm.open}>
+                  <div
+                    className="fixed inset-0 z-50 flex items-center justify-center p-3 sm:p-4 bg-slate-950/80 backdrop-blur-sm overflow-hidden animate-fade-in"
+                    dir={lang === 'ar' ? 'rtl' : 'ltr'}
+                    onClick={(e) => {
+                      if (e.target === e.currentTarget) {
+                        setAccountForm({ open: false, editId: null, name: '', currency: Currency.EUR, include: true });
+                      }
+                    }}
+                  >
+                    <div className="bg-slate-900 border border-slate-800 rounded-2xl p-5 sm:p-6 shadow-2xl max-w-lg w-full max-h-[calc(100vh-2rem)] sm:max-h-[calc(100vh-3rem)] flex flex-col relative overflow-hidden my-auto">
+                      <div className="flex items-center justify-between border-b border-slate-800 pb-3 shrink-0">
+                        <div className="flex items-center gap-2">
+                          <Briefcase className="w-5 h-5 text-emerald-400" />
+                          <h3 className="font-extrabold text-base text-white">
+                            {accountForm.editId ? t.editAccount : t.addAccount}
+                          </h3>
+                        </div>
+                        <button
+                          onClick={() => setAccountForm({ open: false, editId: null, name: '', currency: Currency.EUR, include: true })}
+                          className="text-slate-400 hover:text-white p-1.5 rounded-lg hover:bg-slate-800 transition-colors cursor-pointer"
+                          aria-label="Close"
+                        >
+                          <X className="w-5 h-5" />
+                        </button>
+                      </div>
 
-                    <div className="space-y-1.5">
-                      <label className="text-xs text-slate-400 block font-semibold">{t.brokerAccountCurrencyLabel}</label>
-                      <select
-                        value={accountForm.currency}
-                        onChange={(e) => setAccountForm({ ...accountForm, currency: e.target.value })}
-                        className="bg-slate-950/80 border border-slate-800 focus:outline-none focus:ring-2 focus:ring-emerald-500/20 focus:border-emerald-500/80 px-3 py-2 text-white rounded-xl text-xs w-full transition-all duration-305 font-mono"
-                      >
-                        {activeCurrencies.map(cur => (
-                          <option key={cur} value={cur}>{cur} ({getCurrencySymbol(cur)})</option>
-                        ))}
-                      </select>
-                    </div>
+                      <div className="overflow-y-auto py-3 pr-1 space-y-4 custom-scrollbar flex-1 min-h-0">
+                        <div className="space-y-1.5">
+                          <label className="text-xs text-slate-400 block font-semibold">{t.accountName}</label>
+                          <input
+                            type="text"
+                            value={accountForm.name}
+                            onChange={(e) => setAccountForm({ ...accountForm, name: e.target.value })}
+                            className="bg-slate-950/80 border border-slate-800 focus:outline-none focus:ring-2 focus:ring-emerald-500/20 focus:border-emerald-500/80 px-3 py-2 text-white rounded-xl text-xs w-full transition-all duration-305"
+                            placeholder={t.allOption === 'Tutti' ? 'es. Fineco, Webank, Trade Republic' : t.allOption === 'Todos' ? 'ej. Fineco, Trade Republic, DeGiro' : t.allOption === 'Tous' ? 'ex. BoursoBank, Trade Republic, Interactive Brokers' : t.allOption === '全部' ? '例：华泰证券、富途证券、盈透证券' : t.allOption === 'الكل' ? 'مثال: بينانس، وسيط تفاعلي، هيرميس' : 'e.g. Fineco, Interactive Brokers, Trade Republic'}
+                          />
+                        </div>
 
-                    <div className="space-y-1.5 flex items-end">
-                      <label className="flex items-center gap-2.5 cursor-pointer text-xs text-slate-300 py-2.5 group">
-                        <input
-                          type="checkbox"
-                          checked={accountForm.include}
-                          onChange={(e) => setAccountForm({ ...accountForm, include: e.target.checked })}
-                          className="w-4 h-4 rounded border-slate-800 text-emerald-500 focus:ring-emerald-500/20 focus:ring-offset-slate-900 bg-slate-950 cursor-pointer accent-emerald-500"
-                        />
-                        <span className="group-hover:text-emerald-400 transition-colors duration-250">{t.includeDashboard}</span>
-                      </label>
+                        <div className="space-y-1.5">
+                          <label className="text-xs text-slate-400 block font-semibold">{t.brokerAccountCurrencyLabel}</label>
+                          <select
+                            value={accountForm.currency}
+                            onChange={(e) => setAccountForm({ ...accountForm, currency: e.target.value })}
+                            className="bg-slate-950/80 border border-slate-800 focus:outline-none focus:ring-2 focus:ring-emerald-500/20 focus:border-emerald-500/80 px-3 py-2 text-white rounded-xl text-xs w-full transition-all duration-305 font-mono"
+                          >
+                            {activeCurrencies.map(cur => (
+                              <option key={cur} value={cur}>{cur} ({getCurrencySymbol(cur)})</option>
+                            ))}
+                          </select>
+                        </div>
+
+                        <div className="space-y-1.5 pt-1">
+                          <label className="flex items-center gap-2.5 cursor-pointer text-xs text-slate-300 py-1 group">
+                            <input
+                              type="checkbox"
+                              checked={accountForm.include}
+                              onChange={(e) => setAccountForm({ ...accountForm, include: e.target.checked })}
+                              className="w-4 h-4 rounded border-slate-800 text-emerald-500 focus:ring-emerald-500/20 focus:ring-offset-slate-900 bg-slate-950 cursor-pointer accent-emerald-500"
+                            />
+                            <span className="group-hover:text-emerald-400 transition-colors duration-250">{t.includeDashboard}</span>
+                          </label>
+                        </div>
+                      </div>
+
+                      <div className="flex gap-2 justify-end text-xs pt-3 border-t border-slate-800 shrink-0">
+                        <button
+                          onClick={() => setAccountForm({ open: false, editId: null, name: '', currency: Currency.EUR, include: true })}
+                          className="bg-slate-800 hover:bg-slate-700 text-slate-300 px-4 py-2 rounded-xl font-bold transition-colors duration-300 cursor-pointer"
+                        >
+                          {t.cancel}
+                        </button>
+                        <button
+                          onClick={saveAccountMutation}
+                          className="bg-emerald-600 hover:bg-emerald-500 text-white px-5 py-2 rounded-xl font-bold transition-all duration-300 cursor-pointer shadow-lg shadow-emerald-950/20"
+                        >
+                          {t.save}
+                        </button>
+                      </div>
                     </div>
                   </div>
-
-                  <div className="flex gap-2 justify-end text-xs pt-2">
-                    <button
-                      onClick={() => setAccountForm({ open: false, editId: null, name: '', currency: Currency.EUR, include: true })}
-                      className="bg-slate-800 hover:bg-slate-700 text-slate-300 px-4 py-2 rounded-xl font-bold transition-colors duration-300 cursor-pointer"
-                    >
-                      {t.cancel}
-                    </button>
-                    <button
-                      onClick={saveAccountMutation}
-                      className="bg-emerald-600 hover:bg-emerald-500 text-white px-4 py-2 rounded-xl font-bold transition-all duration-300 cursor-pointer shadow-lg shadow-emerald-950/20"
-                    >
-                      {t.save}
-                    </button>
-                  </div>
-                </div>
+                </ModalPortal>
               )}
 
-              {/* Portfolio management modals form if open */}
+              {/* Portfolio management modal if open */}
               {portfolioForm.open && (
-                <div className="bg-slate-900/40 border border-slate-800/80 p-6 rounded-2xl space-y-4 backdrop-blur-md">
-                  <h3 className="font-bold text-sm text-white tracking-wide border-b border-slate-800 pb-2 flex items-center gap-2">
-                    <div className="w-2 h-2 rounded-full bg-emerald-500 animate-pulse"></div>
-                    {portfolioForm.editId ? t.editPortfolio : t.addPortfolio}
-                  </h3>
-                  <div className="grid md:grid-cols-4 gap-4">
-                    <div className="space-y-1.5">
-                      <label className="text-xs text-slate-400 block font-semibold">{t.associateToAccountLabel}</label>
-                      <select
-                        value={portfolioForm.accountId}
-                        onChange={(e) => setPortfolioForm({ ...portfolioForm, accountId: e.target.value })}
-                        className="bg-slate-100/10 text-white bg-slate-950/80 border border-slate-800 focus:outline-none focus:ring-2 focus:ring-emerald-500/20 focus:border-emerald-500/80 px-3 py-2 rounded-xl text-xs w-full transition-all duration-305 font-medium"
-                      >
-                        {db.accounts.map(a => (
-                          <option key={a.id} value={a.id} className="text-slate-950 bg-white">{a.name}</option>
-                        ))}
-                      </select>
-                    </div>
+                <ModalPortal isOpen={portfolioForm.open}>
+                  <div
+                    className="fixed inset-0 z-50 flex items-center justify-center p-3 sm:p-4 bg-slate-950/80 backdrop-blur-sm overflow-hidden animate-fade-in"
+                    dir={lang === 'ar' ? 'rtl' : 'ltr'}
+                    onClick={(e) => {
+                      if (e.target === e.currentTarget) {
+                        setPortfolioForm({ open: false, editId: null, accountId: '', name: '', include: true });
+                      }
+                    }}
+                  >
+                    <div className="bg-slate-900 border border-slate-800 rounded-2xl p-5 sm:p-6 shadow-2xl max-w-lg w-full max-h-[calc(100vh-2rem)] sm:max-h-[calc(100vh-3rem)] flex flex-col relative overflow-hidden my-auto">
+                      <div className="flex items-center justify-between border-b border-slate-800 pb-3 shrink-0">
+                        <div className="flex items-center gap-2">
+                          <Briefcase className="w-5 h-5 text-emerald-400" />
+                          <h3 className="font-extrabold text-base text-white">
+                            {portfolioForm.editId ? t.editPortfolio : t.addPortfolio}
+                          </h3>
+                        </div>
+                        <button
+                          onClick={() => setPortfolioForm({ open: false, editId: null, accountId: '', name: '', include: true })}
+                          className="text-slate-400 hover:text-white p-1.5 rounded-lg hover:bg-slate-800 transition-colors cursor-pointer"
+                          aria-label="Close"
+                        >
+                          <X className="w-5 h-5" />
+                        </button>
+                      </div>
 
-                    <div className="space-y-1.5 md:col-span-2">
-                      <label className="text-xs text-slate-400 block font-semibold">{t.portfolioName}</label>
-                      <input
-                        type="text"
-                        value={portfolioForm.name}
-                        onChange={(e) => setPortfolioForm({ ...portfolioForm, name: e.target.value })}
-                        className="bg-slate-950/80 border border-slate-800 focus:outline-none focus:ring-2 focus:ring-emerald-500/20 focus:border-emerald-500/80 px-3 py-2 text-white rounded-xl text-xs w-full transition-all duration-305"
-                        placeholder={t.allOption === 'Tutti' ? 'es. Portafoglio Pigro / PAC ETF VWCE' : t.allOption === 'Todos' ? 'ej. Cartera Perezosa / PAC ETF VWCE' : t.allOption === 'Tous' ? 'ex. Portefeuille Paresseux / Plan d\'Épargne ETF VWCE' : t.allOption === '全部' ? '例：极简懒人组合 / VWCE 定投计划' : t.allOption === 'الكل' ? 'مثال: المحفظة الكسولة / خطة ادخار صناديق الاستثمار' : 'e.g. Lazy Portfolio / ETF VWCE Savings Plan'}
-                      />
-                    </div>
+                      <div className="overflow-y-auto py-3 pr-1 space-y-4 custom-scrollbar flex-1 min-h-0">
+                        <div className="space-y-1.5">
+                          <label className="text-xs text-slate-400 block font-semibold">{t.associateToAccountLabel}</label>
+                          <select
+                            value={portfolioForm.accountId}
+                            onChange={(e) => setPortfolioForm({ ...portfolioForm, accountId: e.target.value })}
+                            className="bg-slate-950/80 border border-slate-800 focus:outline-none focus:ring-2 focus:ring-emerald-500/20 focus:border-emerald-500/80 px-3 py-2 text-white rounded-xl text-xs w-full transition-all duration-305 font-medium"
+                          >
+                            {db.accounts.map(a => (
+                              <option key={a.id} value={a.id} className="text-slate-950 bg-white">{a.name}</option>
+                            ))}
+                          </select>
+                        </div>
 
-                    <div className="space-y-1.5 flex items-end">
-                      <label className="flex items-center gap-2.5 cursor-pointer text-xs text-slate-300 py-2.5 group">
-                        <input
-                          type="checkbox"
-                          checked={portfolioForm.include}
-                          onChange={(e) => setPortfolioForm({ ...portfolioForm, include: e.target.checked })}
-                          className="w-4 h-4 rounded border-slate-800 text-emerald-500 focus:ring-emerald-500/20 focus:ring-offset-slate-900 bg-slate-950 cursor-pointer accent-emerald-500"
-                        />
-                        <span className="group-hover:text-emerald-400 transition-colors duration-250">{t.includeDashboard}</span>
-                      </label>
+                        <div className="space-y-1.5">
+                          <label className="text-xs text-slate-400 block font-semibold">{t.portfolioName}</label>
+                          <input
+                            type="text"
+                            value={portfolioForm.name}
+                            onChange={(e) => setPortfolioForm({ ...portfolioForm, name: e.target.value })}
+                            className="bg-slate-950/80 border border-slate-800 focus:outline-none focus:ring-2 focus:ring-emerald-500/20 focus:border-emerald-500/80 px-3 py-2 text-white rounded-xl text-xs w-full transition-all duration-305"
+                            placeholder={t.allOption === 'Tutti' ? 'es. Portafoglio Pigro / PAC ETF VWCE' : t.allOption === 'Todos' ? 'ej. Cartera Perezosa / PAC ETF VWCE' : t.allOption === 'Tous' ? 'ex. Portefeuille Paresseux / Plan d\'Épargne ETF VWCE' : t.allOption === '全部' ? '例：极简懒人组合 / VWCE 定投计划' : t.allOption === 'الكل' ? 'مثال: المحفظة الكسولة / خطة ادخار صناديق الاستثمار' : 'e.g. Lazy Portfolio / ETF VWCE Savings Plan'}
+                          />
+                        </div>
+
+                        <div className="space-y-1.5 pt-1">
+                          <label className="flex items-center gap-2.5 cursor-pointer text-xs text-slate-300 py-1 group">
+                            <input
+                              type="checkbox"
+                              checked={portfolioForm.include}
+                              onChange={(e) => setPortfolioForm({ ...portfolioForm, include: e.target.checked })}
+                              className="w-4 h-4 rounded border-slate-800 text-emerald-500 focus:ring-emerald-500/20 focus:ring-offset-slate-900 bg-slate-950 cursor-pointer accent-emerald-500"
+                            />
+                            <span className="group-hover:text-emerald-400 transition-colors duration-250">{t.includeDashboard}</span>
+                          </label>
+                        </div>
+                      </div>
+
+                      <div className="flex gap-2 justify-end text-xs pt-3 border-t border-slate-800 shrink-0">
+                        <button
+                          onClick={() => setPortfolioForm({ open: false, editId: null, accountId: '', name: '', include: true })}
+                          className="bg-slate-800 hover:bg-slate-700 text-slate-300 px-4 py-2 rounded-xl font-bold transition-colors duration-300 cursor-pointer"
+                        >
+                          {t.cancel}
+                        </button>
+                        <button
+                          onClick={savePortfolioMutation}
+                          className="bg-emerald-600 hover:bg-emerald-500 text-white px-5 py-2 rounded-xl font-bold transition-all duration-300 cursor-pointer shadow-lg shadow-emerald-950/20"
+                        >
+                          {t.save}
+                        </button>
+                      </div>
                     </div>
                   </div>
-
-                  <div className="flex gap-2 justify-end text-xs pt-2">
-                    <button
-                      onClick={() => setPortfolioForm({ open: false, editId: null, accountId: '', name: '', include: true })}
-                      className="bg-slate-800 hover:bg-slate-700 text-slate-300 px-4 py-2 rounded-xl font-bold transition-colors duration-300 cursor-pointer"
-                    >
-                      {t.cancel}
-                    </button>
-                    <button
-                      onClick={savePortfolioMutation}
-                      className="bg-emerald-600 hover:bg-emerald-500 text-white px-4 py-2 rounded-xl font-bold transition-all duration-300 cursor-pointer shadow-lg shadow-emerald-950/20"
-                    >
-                      {t.save}
-                    </button>
-                  </div>
-                </div>
+                </ModalPortal>
               )}
 
               {/* Grid panel listing Accounts containing Portfolios */}
@@ -4025,7 +4201,7 @@ export default function App() {
 
               <TransferModal
                 isOpen={transferForm.open}
-                onClose={() => setTransferForm({ open: false, editTransferId: null, sourcePortfolioId: '', destPortfolioId: '', symbol: '', qty: '', price: '', priceCurrency: 'EUR', sourceCommission: '', sourceCommissionCurrency: 'EUR', destCommission: '', destCommissionCurrency: 'EUR', date: new Date().toISOString().substring(0, 16), criteria: 'FIFO', notes: '' })}
+                onClose={() => setTransferForm({ open: false, editTransferId: null, sourcePortfolioId: '', destPortfolioId: '', symbol: '', qty: '', price: '', priceCurrency: 'EUR', sourceCommission: '', sourceCommissionCurrency: 'EUR', sourceCommissionPaymentMode: 'EXTERNAL', destCommission: '', destCommissionCurrency: 'EUR', destCommissionPaymentMode: 'EXTERNAL', date: new Date().toISOString().substring(0, 16), criteria: 'FIFO', notes: '' })}
                 transferForm={transferForm}
                 setTransferForm={setTransferForm}
                 onSave={saveTransferMutation}
@@ -4095,26 +4271,28 @@ export default function App() {
                           ].map((col) => {
                             const isChecked = txVisibleColumns.includes(col.id);
                             return (
-                              <label
+                              <div
                                 key={col.id}
-                                className="flex items-center gap-2 px-2 py-1.5 hover:bg-slate-800 rounded cursor-pointer transition text-slate-300 hover:text-white select-none font-sans font-bold"
+                                onClick={(e) => {
+                                  e.stopPropagation();
+                                  if (isChecked) {
+                                    if (txVisibleColumns.length > 1) {
+                                      setTxVisibleColumns(txVisibleColumns.filter(x => x !== col.id));
+                                    }
+                                  } else {
+                                    setTxVisibleColumns([...txVisibleColumns, col.id]);
+                                  }
+                                }}
+                                className="flex items-center gap-2 px-2.5 py-2 hover:bg-slate-800 rounded-lg cursor-pointer transition text-slate-300 hover:text-white select-none font-sans font-bold active:bg-slate-700"
                               >
                                 <input
                                   type="checkbox"
                                   checked={isChecked}
-                                  onChange={() => {
-                                    if (isChecked) {
-                                      if (txVisibleColumns.length > 1) {
-                                        setTxVisibleColumns(txVisibleColumns.filter(x => x !== col.id));
-                                      }
-                                    } else {
-                                      setTxVisibleColumns([...txVisibleColumns, col.id]);
-                                    }
-                                  }}
-                                  className="accent-emerald-500 rounded text-emerald-500 focus:ring-0 focus:ring-offset-0 cursor-pointer"
+                                  readOnly
+                                  className="accent-emerald-500 rounded text-emerald-500 focus:ring-0 focus:ring-offset-0 pointer-events-none"
                                 />
                                 <span className="capitalize">{col.label}</span>
-                              </label>
+                              </div>
                             );
                           })}
                         </div>
@@ -4536,7 +4714,10 @@ export default function App() {
                                       </span>
                                     )}
                                     {lotStatus && lotStatus.status === 'FULLY_TRANSFERRED' && (
-                                      <span className="text-[8px] text-emerald-400 font-bold bg-emerald-500/10 px-1.5 py-0.5 rounded border border-emerald-500/20 whitespace-nowrap">
+                                      <span 
+                                        className="text-[8px] text-emerald-400 font-bold bg-emerald-500/10 px-1.5 py-0.5 rounded border border-emerald-500/20 whitespace-nowrap cursor-help"
+                                        title={t.lotDetailTooltip?.replace('{orig}', formatFullQuantity(tx.qty)).replace('{trans}', formatFullQuantity(lotStatus.depleted)).replace('{res}', formatFullQuantity(lotStatus.remaining))}
+                                      >
                                         {t.lotBadgeFully}
                                       </span>
                                     )}
@@ -4544,7 +4725,9 @@ export default function App() {
                                 </td>
                               )}
                               {txVisibleColumns.includes('qty') && (
-                                <td className="py-2.5 px-4 text-slate-300 font-bold font-mono">{formatFullQuantity(tx.qty)}</td>
+                                <td className="py-2.5 px-4 text-slate-300 font-bold font-mono">
+                                  <QuantityDisplay value={tx.qty} />
+                                </td>
                               )}
                               {txVisibleColumns.includes('price') && (
                                 <td className="py-2.5 px-4 text-slate-300 font-bold">
@@ -4580,19 +4763,61 @@ export default function App() {
                                 </td>
                               )}
                               {txVisibleColumns.includes('commission') && (
-                                <td className="py-2.5 px-4">
-                                  {tx.commission > 0 ? (
-                                    <div className="flex flex-col">
-                                      <span className="font-bold text-rose-400">
-                                        {formatCurrency(convertValue(tx.commission, tx.commissionCurrency || tx.currency || 'EUR', selectedCurrency, tx.date), selectedCurrency)}
-                                      </span>
-                                      {(tx.commissionCurrency || tx.currency) && (tx.commissionCurrency || tx.currency) !== selectedCurrency && (
-                                        <span className="text-[9px] text-slate-500 font-normal">
-                                          Orig: {formatCurrency(tx.commission, tx.commissionCurrency || tx.currency || 'EUR')}
+                                <td className="py-2.5 px-4 font-mono">
+                                  {tx.commission > 0 ? (() => {
+                                    const isAssetComm = tx.commissionPaymentMode === 'ASSET' || 
+                                      (tx.commissionCurrency && tx.commissionCurrency.toUpperCase() === tx.symbol.toUpperCase());
+                                    
+                                    if (isAssetComm) {
+                                      const assetSym = tx.commissionCurrency || tx.symbol;
+                                      const unitPriceInDisplay = tx.price
+                                        ? convertValue(tx.price, tx.currency || 'EUR', selectedCurrency, tx.date.split('T')[0])
+                                        : (latestPriceObj ? convertValue(latestPriceObj.price, tx.currency || 'EUR', selectedCurrency, todayStr) : 0);
+                                      const equivFiat = cleanFloatNoise(tx.commission * unitPriceInDisplay);
+
+                                      return (
+                                        <div className="flex flex-col">
+                                          <span className="font-bold text-rose-400">
+                                            <QuantityDisplay value={tx.commission} assetSymbol={assetSym} />
+                                          </span>
+                                          {unitPriceInDisplay > 0 && (
+                                            <span
+                                              className="text-[10px] text-slate-400 font-normal whitespace-nowrap"
+                                              title={`Tasso di cambio applicato: 1 ${assetSym} = ${formatCurrency(unitPriceInDisplay, selectedCurrency)} (Data: ${formatDateString(tx.date, lang)})`}
+                                            >
+                                              ≈ {formatCurrency(equivFiat, selectedCurrency)} <span className="text-slate-500 font-sans">(@ {formatCurrency(unitPriceInDisplay, selectedCurrency)})</span>
+                                            </span>
+                                          )}
+                                        </div>
+                                      );
+                                    }
+
+                                    const commInDisplay = convertValue(
+                                      tx.commission,
+                                      tx.commissionCurrency || tx.currency || 'EUR',
+                                      selectedCurrency,
+                                      tx.date.split('T')[0]
+                                    );
+                                    const origCurr = tx.commissionCurrency || tx.currency || 'EUR';
+
+                                    return (
+                                      <div className="flex flex-col">
+                                        <span className="font-bold text-rose-400">
+                                          {formatCurrency(commInDisplay, selectedCurrency)}
                                         </span>
-                                      )}
-                                    </div>
-                                  ) : '-'}
+                                        {origCurr !== selectedCurrency && (
+                                          <span
+                                            className="text-[9px] text-slate-500 font-normal whitespace-nowrap"
+                                            title={`Tasso di cambio: 1 ${origCurr} = ${formatCurrency(convertValue(1, origCurr, selectedCurrency, tx.date.split('T')[0]), selectedCurrency)}`}
+                                          >
+                                            Orig: {formatCurrency(tx.commission, origCurr)}
+                                          </span>
+                                        )}
+                                      </div>
+                                    );
+                                  })() : (
+                                    <span className="text-slate-600">-</span>
+                                  )}
                                 </td>
                               )}
                               {txVisibleColumns.includes('notes') && (
@@ -4632,7 +4857,7 @@ export default function App() {
                               <td colSpan={['date', 'portfolio', 'type', 'symbol'].filter(id => txVisibleColumns.includes(id)).length} className="py-3 px-4 text-right text-slate-400 tracking-widest">{t.totalsLabel}:</td>
                               {txVisibleColumns.includes('qty') && (
                                 <td className="py-3 px-4 text-slate-300 font-bold font-mono">
-                                  {formatFullQuantity(tableTotals.totalQty)}
+                                  <QuantityDisplay value={tableTotals.totalQty} />
                                 </td>
                               )}
                               {txVisibleColumns.includes('price') && (
@@ -4651,9 +4876,31 @@ export default function App() {
                               )}
                               {txVisibleColumns.includes('commission') && (
                                 <td className="py-3 px-4 text-rose-400">
-                                  {formatCurrency(
-                                    tableTotals.totalCommissions,
-                                    selectedCurrency
+                                  {tableTotals.totalCommissions > 0 ? (
+                                    <div className="flex flex-col">
+                                      <span className="font-bold font-mono text-xs" title="Totale complessivo commissioni (fiat + controvalore in asset al cambio della transazione)">
+                                        {formatCurrency(tableTotals.totalCommissions, selectedCurrency)}
+                                      </span>
+                                      {tableTotals.assetCommissions.length > 0 && (
+                                        <div className="text-[9px] text-slate-400 font-normal space-y-0.5 mt-0.5 lowercase">
+                                          {tableTotals.fiatCommissions > 0 && (
+                                            <div>fiat: {formatCurrency(tableTotals.fiatCommissions, selectedCurrency)}</div>
+                                          )}
+                                          {tableTotals.assetCommissions.map(ac => (
+                                            <div
+                                              key={ac.symbol}
+                                              className="whitespace-nowrap font-mono"
+                                              title={`Controvalore: ${formatCurrency(ac.fiatValue, selectedCurrency)} (Cambio medio: 1 ${ac.symbol} = ${formatCurrency(ac.impliedRate, selectedCurrency)})`}
+                                            >
+                                              + <QuantityDisplay value={ac.qty} assetSymbol={ac.symbol} />
+                                              <span className="text-slate-500 ml-1">(≈ {formatCurrency(ac.fiatValue, selectedCurrency)})</span>
+                                            </div>
+                                          ))}
+                                        </div>
+                                      )}
+                                    </div>
+                                  ) : (
+                                    <span className="text-slate-600">-</span>
                                   )}
                                 </td>
                               )}
@@ -4718,7 +4965,10 @@ export default function App() {
                                   </span>
                                 )}
                                 {lotStatus && lotStatus.status === 'FULLY_TRANSFERRED' && (
-                                  <span className="text-[8px] text-emerald-400 font-bold bg-emerald-500/10 px-1.5 py-0.5 rounded border border-amber-500/20 whitespace-nowrap">
+                                  <span 
+                                    className="text-[8px] text-emerald-400 font-bold bg-emerald-500/10 px-1.5 py-0.5 rounded border border-emerald-500/20 whitespace-nowrap cursor-help"
+                                    title={t.lotDetailTooltip?.replace('{orig}', formatFullQuantity(tx.qty)).replace('{trans}', formatFullQuantity(lotStatus.depleted)).replace('{res}', formatFullQuantity(lotStatus.remaining))}
+                                  >
                                     {t.lotBadgeFully}
                                   </span>
                                 )}
@@ -4746,7 +4996,7 @@ export default function App() {
                             {txVisibleColumns.includes('qty') && (
                               <div>
                                 <span className="block text-[10px] text-slate-500 uppercase tracking-widest">{t.qtyLabel}</span>
-                                <span className="text-slate-300 font-bold font-mono">{formatFullQuantity(tx.qty)}</span>
+                                <QuantityDisplay value={tx.qty} className="text-slate-300 font-bold font-mono" />
                               </div>
                             )}
                             {txVisibleColumns.includes('price') && (
@@ -4770,12 +5020,47 @@ export default function App() {
                                 <span className="text-[9px] text-slate-400">({formatCurrency(latestPriceObj.price, tx.currency || 'EUR')})</span>
                               </div>
                             )}
-                            {txVisibleColumns.includes('commission') && tx.commission > 0 && (
-                              <div className="col-span-2 pt-1 border-t border-slate-800/40 flex items-center justify-between">
-                                <span className="block text-[10px] text-slate-500 uppercase tracking-widest">{t.commissionLabel}</span>
-                                <span className="text-rose-400 font-mono">{formatCurrency(convertValue(tx.commission, tx.currency || 'EUR', selectedCurrency, tx.date), selectedCurrency)}</span>
-                              </div>
-                            )}
+                            {txVisibleColumns.includes('commission') && tx.commission > 0 && (() => {
+                              const isAssetComm = tx.commissionPaymentMode === 'ASSET' || 
+                                (tx.commissionCurrency && tx.commissionCurrency.toUpperCase() === tx.symbol.toUpperCase());
+                              
+                              if (isAssetComm) {
+                                const assetSym = tx.commissionCurrency || tx.symbol;
+                                const unitPriceInDisplay = tx.price
+                                  ? convertValue(tx.price, tx.currency || 'EUR', selectedCurrency, tx.date.split('T')[0])
+                                  : (latestPriceObj ? convertValue(latestPriceObj.price, tx.currency || 'EUR', selectedCurrency, todayStr) : 0);
+                                const equivFiat = cleanFloatNoise(tx.commission * unitPriceInDisplay);
+
+                                return (
+                                  <div className="col-span-2 pt-1 border-t border-slate-800/40 flex items-center justify-between">
+                                    <span className="block text-[10px] text-slate-500 uppercase tracking-widest">{t.commissionLabel}</span>
+                                    <div className="text-right font-mono">
+                                      <span className="text-rose-400 font-bold block">
+                                        <QuantityDisplay value={tx.commission} assetSymbol={assetSym} />
+                                      </span>
+                                      {unitPriceInDisplay > 0 && (
+                                        <span className="text-[9px] text-slate-400 block font-sans">
+                                          ≈ {formatCurrency(equivFiat, selectedCurrency)} <span className="text-slate-500">(@ {formatCurrency(unitPriceInDisplay, selectedCurrency)})</span>
+                                        </span>
+                                      )}
+                                    </div>
+                                  </div>
+                                );
+                              }
+
+                              const commInDisplay = convertValue(
+                                tx.commission,
+                                tx.commissionCurrency || tx.currency || 'EUR',
+                                selectedCurrency,
+                                tx.date.split('T')[0]
+                              );
+                              return (
+                                <div className="col-span-2 pt-1 border-t border-slate-800/40 flex items-center justify-between">
+                                  <span className="block text-[10px] text-slate-500 uppercase tracking-widest">{t.commissionLabel}</span>
+                                  <span className="text-rose-400 font-mono font-bold">{formatCurrency(commInDisplay, selectedCurrency)}</span>
+                                </div>
+                              );
+                            })()}
                             {txVisibleColumns.includes('notes') && tx.notes && (
                               <div className="col-span-2 pt-1 mt-1 border-t border-slate-800/40 text-[10px] text-slate-500 italic">
                                 {tx.notes}
@@ -4788,12 +5073,12 @@ export default function App() {
 
                     {/* Mobile Totals Footer Card */}
                     {getProcessedTransactions().length > 0 && (
-                      <div className="p-4 bg-slate-900/90 border border-slate-800 rounded-xl space-y-2.5 shadow-lg text-xs font-mono">
+                      <div className="p-4 bg-slate-900 border border-slate-800 rounded-xl space-y-2.5 shadow-xl text-xs font-mono">
                         <div className="flex items-center justify-between border-b border-slate-800 pb-2">
-                          <span className="font-extrabold text-white uppercase tracking-wider flex items-center gap-1.5 font-sans">
-                            <span className="text-emerald-400 font-mono">Σ</span> {t.allOption === 'Tutti' ? 'TOTALI' : 'TOTALS'}
+                          <span className="font-extrabold text-white uppercase tracking-wider flex items-center gap-1.5 font-sans text-sm">
+                            <span className="text-emerald-400 font-mono">Σ</span> {t.allOption === 'Tutti' ? 'TOTALI REGISTRO' : 'REGISTRY TOTALS'}
                           </span>
-                          <span className="text-[10px] text-slate-500 font-mono">
+                          <span className="text-xs text-slate-400 font-mono font-bold bg-slate-800/80 px-2 py-0.5 rounded">
                             {getProcessedTransactions().length} {t.allOption === 'Tutti' ? 'registrazioni' : 'records'}
                           </span>
                         </div>
@@ -4804,25 +5089,33 @@ export default function App() {
                             selectedCurrency
                           );
                           return (
-                            <div className="grid grid-cols-2 gap-2 text-slate-300 pt-1">
-                              {txVisibleColumns.includes('qty') && (
-                                <div>
-                                  <span className="block text-[10px] text-slate-500 uppercase tracking-widest font-sans font-bold">{t.qtyLabel}</span>
-                                  <span className="font-bold text-white font-mono text-sm">{formatFullQuantity(tableTotals.totalQty)}</span>
-                                </div>
-                              )}
-                              {txVisibleColumns.includes('total') && (
-                                <div>
-                                  <span className="block text-[10px] text-slate-500 uppercase tracking-widest font-sans font-bold">{t.allOption === 'Tutti' ? 'Importo Totale' : 'Total Amount'}</span>
-                                  <span className="font-bold text-emerald-400 font-mono text-sm">{formatCurrency(tableTotals.totalAmount, selectedCurrency)}</span>
-                                </div>
-                              )}
-                              {txVisibleColumns.includes('commission') && (
-                                <div className="col-span-2 pt-1 border-t border-slate-800/40 flex justify-between items-center">
-                                  <span className="text-[10px] text-slate-500 uppercase tracking-widest font-sans font-bold">{t.commissionLabel}</span>
+                            <div className="grid grid-cols-2 gap-3 text-slate-300 pt-1">
+                              <div>
+                                <span className="block text-[10px] text-slate-500 uppercase tracking-widest font-sans font-bold">{t.qtyLabel || 'Quantità Netta'}</span>
+                                <QuantityDisplay value={tableTotals.totalQty} className="font-bold text-white font-mono text-sm" />
+                              </div>
+                              <div>
+                                <span className="block text-[10px] text-slate-500 uppercase tracking-widest font-sans font-bold">{t.allOption === 'Tutti' ? 'Importo Totale' : 'Total Amount'}</span>
+                                <span className="font-bold text-emerald-400 font-mono text-sm">{formatCurrency(tableTotals.totalAmount, selectedCurrency)}</span>
+                              </div>
+                              <div className="col-span-2 pt-2 border-t border-slate-800/60 flex flex-col gap-1">
+                                <div className="flex justify-between items-center">
+                                  <span className="text-[10px] text-slate-500 uppercase tracking-widest font-sans font-bold">{t.commissionLabel || 'Commissioni'}</span>
                                   <span className="font-bold text-rose-400 font-mono text-sm">{formatCurrency(tableTotals.totalCommissions, selectedCurrency)}</span>
                                 </div>
-                              )}
+                                {tableTotals.assetCommissions.length > 0 && (
+                                  <div className="text-[9px] text-slate-400 font-normal space-y-0.5 pt-0.5 text-right font-mono">
+                                    {tableTotals.fiatCommissions > 0 && (
+                                      <div>Fiat: {formatCurrency(tableTotals.fiatCommissions, selectedCurrency)}</div>
+                                    )}
+                                    {tableTotals.assetCommissions.map(ac => (
+                                      <div key={ac.symbol} className="whitespace-nowrap">
+                                        + <QuantityDisplay value={ac.qty} assetSymbol={ac.symbol} /> (≈ {formatCurrency(ac.fiatValue, selectedCurrency)})
+                                      </div>
+                                    ))}
+                                  </div>
+                                )}
+                              </div>
                             </div>
                           );
                         })()}
@@ -5082,59 +5375,66 @@ export default function App() {
 
               {/* Pending Import Modal */}
               {pendingImport && (
-                <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/80 backdrop-blur-sm p-4">
-                  <div className="bg-slate-900 border border-slate-700 rounded-2xl max-w-lg w-full p-6 space-y-6 shadow-2xl">
-                    <div className="flex items-center gap-3 border-b border-slate-800 pb-4">
-                      <div className="p-2 bg-sky-500/10 text-sky-400 rounded-lg">
-                        <Database className="w-6 h-6" />
+                <ModalPortal isOpen={!!pendingImport}>
+                  <div
+                    className="fixed inset-0 z-50 flex items-center justify-center bg-black/80 backdrop-blur-sm p-3 sm:p-4 overflow-hidden animate-fade-in"
+                    onClick={(e) => {
+                      if (e.target === e.currentTarget) setPendingImport(null);
+                    }}
+                  >
+                    <div className="bg-slate-900 border border-slate-700 rounded-2xl max-w-lg w-full p-6 space-y-6 shadow-2xl max-h-[calc(100vh-2rem)] flex flex-col my-auto overflow-hidden">
+                      <div className="flex items-center gap-3 border-b border-slate-800 pb-4 shrink-0">
+                        <div className="p-2 bg-sky-500/10 text-sky-400 rounded-lg">
+                          <Database className="w-6 h-6" />
+                        </div>
+                        <h2 className="text-xl font-black text-white">{t.importOptionsTitle}</h2>
                       </div>
-                      <h2 className="text-xl font-black text-white">{t.importOptionsTitle}</h2>
-                    </div>
 
-                    <div className="space-y-4">
-                      <div className="bg-rose-950/20 border border-rose-500/20 p-4 rounded-xl">
-                        <h4 className="flex items-center gap-2 font-bold text-rose-400 mb-2 text-sm">
-                          <AlertTriangle className="w-4 h-4" />
-                          {t.overwriteDatabaseTitle}
-                        </h4>
-                        <p className="text-xs text-slate-300">
-                          {t.overwriteDatabaseDesc}
-                        </p>
+                      <div className="space-y-4 overflow-y-auto custom-scrollbar pr-1 flex-1 min-h-0">
+                        <div className="bg-rose-950/20 border border-rose-500/20 p-4 rounded-xl">
+                          <h4 className="flex items-center gap-2 font-bold text-rose-400 mb-2 text-sm">
+                            <AlertTriangle className="w-4 h-4" />
+                            {t.overwriteDatabaseTitle}
+                          </h4>
+                          <p className="text-xs text-slate-300">
+                            {t.overwriteDatabaseDesc}
+                          </p>
+                          <button
+                            onClick={executeOverwrite}
+                            className="mt-3 w-full bg-rose-600 hover:bg-rose-500 text-white font-bold py-2 rounded-lg text-sm transition-colors cursor-pointer"
+                          >
+                            {t.overwriteBtn}
+                          </button>
+                        </div>
+
+                        <div className="bg-emerald-950/20 border border-emerald-500/20 p-4 rounded-xl">
+                          <h4 className="flex items-center gap-2 font-bold text-emerald-400 mb-2 text-sm">
+                            <Database className="w-4 h-4" />
+                            {t.mergeDataTitle}
+                          </h4>
+                          <p className="text-xs text-slate-300">
+                            {t.mergeDataDesc}
+                          </p>
+                          <button
+                            onClick={executeMerge}
+                            className="mt-3 w-full bg-emerald-600 hover:bg-emerald-500 text-white font-bold py-2 rounded-lg text-sm transition-colors cursor-pointer"
+                          >
+                            {t.mergeBtn}
+                          </button>
+                        </div>
+                      </div>
+
+                      <div className="pt-2 shrink-0 border-t border-slate-800">
                         <button
-                          onClick={executeOverwrite}
-                          className="mt-3 w-full bg-rose-600 hover:bg-rose-500 text-white font-bold py-2 rounded-lg text-sm transition-colors cursor-pointer"
+                          onClick={() => setPendingImport(null)}
+                          className="w-full bg-slate-800 hover:bg-slate-700 text-slate-300 font-bold py-2.5 rounded-xl transition-colors cursor-pointer"
                         >
-                          {t.overwriteBtn}
+                          {t.cancel}
                         </button>
                       </div>
-
-                      <div className="bg-emerald-950/20 border border-emerald-500/20 p-4 rounded-xl">
-                        <h4 className="flex items-center gap-2 font-bold text-emerald-400 mb-2 text-sm">
-                          <Database className="w-4 h-4" />
-                          {t.mergeDataTitle}
-                        </h4>
-                        <p className="text-xs text-slate-300">
-                          {t.mergeDataDesc}
-                        </p>
-                        <button
-                          onClick={executeMerge}
-                          className="mt-3 w-full bg-emerald-600 hover:bg-emerald-500 text-white font-bold py-2 rounded-lg text-sm transition-colors cursor-pointer"
-                        >
-                          {t.mergeBtn}
-                        </button>
-                      </div>
-                    </div>
-
-                    <div className="pt-2">
-                      <button
-                        onClick={() => setPendingImport(null)}
-                        className="w-full bg-slate-800 hover:bg-slate-700 text-slate-300 font-bold py-2.5 rounded-xl transition-colors cursor-pointer"
-                      >
-                        {t.cancel}
-                      </button>
                     </div>
                   </div>
-                </div>
+                </ModalPortal>
               )}
 
               {/* Comprehensive Legal Disclaimer & Financial Information Advisory Card */}

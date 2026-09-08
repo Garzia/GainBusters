@@ -40,6 +40,7 @@ export interface Transaction {
   commission: number; // Commission paid
   currency: Currency | string;
   commissionCurrency?: string;
+  commissionPaymentMode?: 'EXTERNAL' | 'ASSET'; // Payment mode for commission
   notes: string;
   transferId?: string; // Links transaction to its unified Transfer entity
   parentTransactionId?: string; // Links to parent lot tx (BUY or TRANSFER_IN)
@@ -61,8 +62,10 @@ export interface Transfer {
   destPortfolioId: string;
   sourceCommission?: number;
   sourceCommissionCurrency?: string;
+  sourceCommissionPaymentMode?: 'EXTERNAL' | 'ASSET';
   destCommission?: number;
   destCommissionCurrency?: string;
+  destCommissionPaymentMode?: 'EXTERNAL' | 'ASSET';
   criteria: 'FIFO' | 'LIFO';
   notes?: string;
   childTransactionIds?: string[];

@@ -1,6 +1,7 @@
 import React from 'react';
 import { X, RefreshCw } from 'lucide-react';
 import { DBState, TranslationDictionary } from '../types';
+import { ModalPortal } from './ModalPortal';
 
 interface TransferModalProps {
   isOpen: boolean;
@@ -56,32 +57,40 @@ export const TransferModal: React.FC<TransferModalProps> = ({
     : 0;
 
   return (
-    <div className="fixed inset-0 z-50 flex items-start justify-center p-4 pt-6 sm:pt-12 md:pt-16 bg-slate-950/80 backdrop-blur-sm overflow-y-auto animate-fade-in" dir={lang === 'ar' ? 'rtl' : 'ltr'}>
-      <div className="bg-slate-900 border border-amber-500/30 rounded-2xl p-6 shadow-2xl max-w-2xl w-full my-4 space-y-4 relative overflow-hidden">
-        <div className="absolute right-0 top-0 -translate-y-6 translate-x-6 w-32 h-32 bg-amber-500/10 rounded-full blur-3xl pointer-events-none"></div>
+    <ModalPortal isOpen={isOpen}>
+      <div
+        className="fixed inset-0 z-50 flex items-center justify-center p-3 sm:p-4 bg-slate-950/80 backdrop-blur-sm overflow-hidden animate-fade-in"
+        dir={lang === 'ar' ? 'rtl' : 'ltr'}
+        onClick={(e) => {
+          if (e.target === e.currentTarget) onClose();
+        }}
+      >
+        <div className="bg-slate-900 border border-amber-500/30 rounded-2xl p-5 sm:p-6 shadow-2xl max-w-2xl w-full max-h-[calc(100vh-2rem)] sm:max-h-[calc(100vh-3rem)] flex flex-col relative overflow-hidden my-auto">
+          <div className="absolute right-0 top-0 -translate-y-6 translate-x-6 w-32 h-32 bg-amber-500/10 rounded-full blur-3xl pointer-events-none"></div>
 
-        <div className="flex items-center justify-between border-b border-slate-800 pb-3">
-          <div className="flex items-center gap-2">
-            <RefreshCw className="w-5 h-5 text-amber-400" />
-            <div>
-              <h3 className="font-extrabold text-base text-white tracking-wide">
-                {transferForm.editTransferId ? t.editTransferModalTitle : t.newTransferModalTitle}
-              </h3>
-              <span className="text-[10px] text-amber-500 font-mono font-bold tracking-widest uppercase">
-                {t.internalAssetMovement}
-              </span>
+          <div className="flex items-center justify-between border-b border-slate-800 pb-3 shrink-0">
+            <div className="flex items-center gap-2">
+              <RefreshCw className="w-5 h-5 text-amber-400" />
+              <div>
+                <h3 className="font-extrabold text-base text-white tracking-wide">
+                  {transferForm.editTransferId ? t.editTransferModalTitle : t.newTransferModalTitle}
+                </h3>
+                <span className="text-[10px] text-amber-500 font-mono font-bold tracking-widest uppercase">
+                  {t.internalAssetMovement}
+                </span>
+              </div>
             </div>
+            <button
+              onClick={onClose}
+              className="text-slate-400 hover:text-white p-1.5 rounded-lg hover:bg-slate-800 transition-colors cursor-pointer"
+              aria-label={t.closeLabel}
+            >
+              <X className="w-5 h-5" />
+            </button>
           </div>
-          <button
-            onClick={onClose}
-            className="text-slate-400 hover:text-white p-1.5 rounded-lg hover:bg-slate-800 transition-colors cursor-pointer"
-            aria-label={t.closeLabel}
-          >
-            <X className="w-5 h-5" />
-          </button>
-        </div>
 
-        <div className="grid grid-cols-1 md:grid-cols-2 gap-4 text-xs">
+          <div className="overflow-y-auto py-2 pr-1 space-y-4 custom-scrollbar flex-1 min-h-0">
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-4 text-xs">
           {/* Source Portfolio */}
           <div className="space-y-1.5">
             <label className="text-slate-400 font-semibold">{t.sourcePortfolioLabel}</label>
@@ -266,9 +275,9 @@ export const TransferModal: React.FC<TransferModalProps> = ({
             </div>
           </div>
 
-          {/* Source Commission & Currency */}
-          <div className="grid grid-cols-3 gap-2">
-            <div className="col-span-2 space-y-1.5">
+          {/* Source Commission & Currency & Payment Mode */}
+          <div className="grid grid-cols-1 sm:grid-cols-3 gap-2 col-span-1 md:col-span-2 bg-slate-950/50 p-3 rounded-xl border border-amber-500/10 space-y-2 sm:space-y-0">
+            <div className="space-y-1 sm:col-span-1">
               <label className="text-slate-400 font-semibold">{t.sourceCommissionLabel || 'Comm. Uscita (Sorgente)'}</label>
               <input
                 type="number"
@@ -278,23 +287,47 @@ export const TransferModal: React.FC<TransferModalProps> = ({
                 className="bg-slate-950/80 border border-slate-800 focus:outline-none focus:ring-2 focus:ring-amber-500/20 focus:border-amber-500/80 px-3 py-2 text-white rounded-xl w-full font-mono transition-all duration-300"
               />
             </div>
-            <div className="space-y-1.5">
-              <label className="text-slate-400 font-semibold">{t.commissionCurrencyLabel || 'Valuta'}</label>
+            <div className="space-y-1 sm:col-span-1">
+              <label className="text-slate-400 font-semibold">Tipo Comm. Sorgente</label>
               <select
-                value={transferForm.sourceCommissionCurrency || 'EUR'}
-                onChange={(e) => setTransferForm({ ...transferForm, sourceCommissionCurrency: e.target.value })}
-                className="bg-slate-950/80 border border-slate-800 focus:outline-none focus:ring-2 focus:ring-amber-500/20 focus:border-amber-500/80 px-2 py-2 text-white rounded-xl w-full font-mono transition-all text-xs"
+                value={transferForm.sourceCommissionPaymentMode || 'EXTERNAL'}
+                onChange={(e) => {
+                  const mode = e.target.value as 'EXTERNAL' | 'ASSET';
+                  setTransferForm({
+                    ...transferForm,
+                    sourceCommissionPaymentMode: mode,
+                    sourceCommissionCurrency: mode === 'ASSET' ? (transferForm.symbol || 'ASSET') : transferForm.sourceCommissionCurrency
+                  });
+                }}
+                className="bg-slate-950/80 border border-slate-800 focus:outline-none focus:ring-2 focus:ring-amber-500/20 focus:border-amber-500/80 px-2 py-2 text-white rounded-xl w-full font-sans transition-all text-xs font-bold"
               >
-                {activeCurrencies.map(cur => (
-                  <option key={cur} value={cur}>{cur}</option>
-                ))}
+                <option value="EXTERNAL">Capitale Esterno (Fiat)</option>
+                <option value="ASSET">In Asset ({transferForm.symbol || 'Asset'})</option>
               </select>
+            </div>
+            <div className="space-y-1 sm:col-span-1">
+              <label className="text-slate-400 font-semibold">{t.commissionCurrencyLabel || 'Valuta / Unità'}</label>
+              {transferForm.sourceCommissionPaymentMode === 'ASSET' ? (
+                <div className="bg-slate-900 border border-slate-800 px-3 py-2 text-amber-400 font-mono font-bold rounded-xl text-xs flex items-center h-[38px]">
+                  {transferForm.symbol || 'ASSET'}
+                </div>
+              ) : (
+                <select
+                  value={transferForm.sourceCommissionCurrency || 'EUR'}
+                  onChange={(e) => setTransferForm({ ...transferForm, sourceCommissionCurrency: e.target.value })}
+                  className="bg-slate-950/80 border border-slate-800 focus:outline-none focus:ring-2 focus:ring-amber-500/20 focus:border-amber-500/80 px-2 py-2 text-white rounded-xl w-full font-mono transition-all text-xs"
+                >
+                  {activeCurrencies.map(cur => (
+                    <option key={cur} value={cur}>{cur}</option>
+                  ))}
+                </select>
+              )}
             </div>
           </div>
 
-          {/* Dest Commission & Currency */}
-          <div className="grid grid-cols-3 gap-2">
-            <div className="col-span-2 space-y-1.5">
+          {/* Dest Commission & Currency & Payment Mode */}
+          <div className="grid grid-cols-1 sm:grid-cols-3 gap-2 col-span-1 md:col-span-2 bg-slate-950/50 p-3 rounded-xl border border-amber-500/10 space-y-2 sm:space-y-0">
+            <div className="space-y-1 sm:col-span-1">
               <label className="text-slate-400 font-semibold">{t.destCommissionLabel || 'Comm. Entrata (Destinazione)'}</label>
               <input
                 type="number"
@@ -304,17 +337,41 @@ export const TransferModal: React.FC<TransferModalProps> = ({
                 className="bg-slate-950/80 border border-slate-800 focus:outline-none focus:ring-2 focus:ring-amber-500/20 focus:border-amber-500/80 px-3 py-2 text-white rounded-xl w-full font-mono transition-all duration-300"
               />
             </div>
-            <div className="space-y-1.5">
-              <label className="text-slate-400 font-semibold">{t.commissionCurrencyLabel || 'Valuta'}</label>
+            <div className="space-y-1 sm:col-span-1">
+              <label className="text-slate-400 font-semibold">Tipo Comm. Destinazione</label>
               <select
-                value={transferForm.destCommissionCurrency || 'EUR'}
-                onChange={(e) => setTransferForm({ ...transferForm, destCommissionCurrency: e.target.value })}
-                className="bg-slate-950/80 border border-slate-800 focus:outline-none focus:ring-2 focus:ring-amber-500/20 focus:border-amber-500/80 px-2 py-2 text-white rounded-xl w-full font-mono transition-all text-xs"
+                value={transferForm.destCommissionPaymentMode || 'EXTERNAL'}
+                onChange={(e) => {
+                  const mode = e.target.value as 'EXTERNAL' | 'ASSET';
+                  setTransferForm({
+                    ...transferForm,
+                    destCommissionPaymentMode: mode,
+                    destCommissionCurrency: mode === 'ASSET' ? (transferForm.symbol || 'ASSET') : transferForm.destCommissionCurrency
+                  });
+                }}
+                className="bg-slate-950/80 border border-slate-800 focus:outline-none focus:ring-2 focus:ring-amber-500/20 focus:border-amber-500/80 px-2 py-2 text-white rounded-xl w-full font-sans transition-all text-xs font-bold"
               >
-                {activeCurrencies.map(cur => (
-                  <option key={cur} value={cur}>{cur}</option>
-                ))}
+                <option value="EXTERNAL">Capitale Esterno (Fiat)</option>
+                <option value="ASSET">In Asset ({transferForm.symbol || 'Asset'})</option>
               </select>
+            </div>
+            <div className="space-y-1 sm:col-span-1">
+              <label className="text-slate-400 font-semibold">{t.commissionCurrencyLabel || 'Valuta / Unità'}</label>
+              {transferForm.destCommissionPaymentMode === 'ASSET' ? (
+                <div className="bg-slate-900 border border-slate-800 px-3 py-2 text-amber-400 font-mono font-bold rounded-xl text-xs flex items-center h-[38px]">
+                  {transferForm.symbol || 'ASSET'}
+                </div>
+              ) : (
+                <select
+                  value={transferForm.destCommissionCurrency || 'EUR'}
+                  onChange={(e) => setTransferForm({ ...transferForm, destCommissionCurrency: e.target.value })}
+                  className="bg-slate-950/80 border border-slate-800 focus:outline-none focus:ring-2 focus:ring-amber-500/20 focus:border-amber-500/80 px-2 py-2 text-white rounded-xl w-full font-mono transition-all text-xs"
+                >
+                  {activeCurrencies.map(cur => (
+                    <option key={cur} value={cur}>{cur}</option>
+                  ))}
+                </select>
+              )}
             </div>
           </div>
 
@@ -336,8 +393,9 @@ export const TransferModal: React.FC<TransferModalProps> = ({
             {formErr}
           </div>
         )}
+      </div>
 
-        <div className="flex gap-2 justify-end text-xs pt-2 border-t border-slate-800">
+        <div className="flex gap-2 justify-end text-xs pt-3 border-t border-slate-800 shrink-0">
           <button
             type="button"
             onClick={onClose}
@@ -355,5 +413,6 @@ export const TransferModal: React.FC<TransferModalProps> = ({
         </div>
       </div>
     </div>
+    </ModalPortal>
   );
 };

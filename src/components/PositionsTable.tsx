@@ -7,6 +7,8 @@ import React, { useState, useMemo } from 'react';
 import { LanguagePhrases, Portfolio } from '../types.ts';
 import { TickerMetric, PortfolioLot } from '../utils/finance.ts';
 import { formatDateString } from '../utils.ts';
+import { QuantityDisplay } from './QuantityDisplay';
+import { formatFullQuantity } from '../utils/formatters';
 import {
   Search,
   ChevronDown,
@@ -76,7 +78,7 @@ export const PositionsTable: React.FC<PositionsTableProps> = ({
           dailyChangePct
         };
       })
-      .filter(pos => pos.sharesOwned > 1e-8);
+      .filter(pos => pos.sharesOwned > 1e-12);
   }, [tickerMetrics, totalPortfolioNominalValue]);
 
   // Filter positions by search term
@@ -335,7 +337,7 @@ export const PositionsTable: React.FC<PositionsTableProps> = ({
 
                       {/* Quantity */}
                       <td className="py-3 px-3 text-right font-bold text-slate-200">
-                        {pos.sharesOwned.toLocaleString(lang, { maximumFractionDigits: 6 })}
+                        <QuantityDisplay value={pos.sharesOwned} />
                       </td>
 
                       {/* PMC (Average Cost) */}
@@ -343,9 +345,12 @@ export const PositionsTable: React.FC<PositionsTableProps> = ({
                         {formatCurrency(pos.pmc, selectedCurrency)}
                       </td>
 
-                      {/* Current Unit Price */}
+                      {/* Current Unit Price with Daily Change */}
                       <td className="py-3 px-3 text-right text-slate-300">
-                        {formatCurrency(pos.todayPriceInDisplay, selectedCurrency)}
+                        <div>{formatCurrency(pos.todayPriceInDisplay, selectedCurrency)}</div>
+                        <div className={`text-[10px] font-bold tracking-tight ${pos.dailyChangePct >= 0 ? 'text-emerald-400' : 'text-rose-400'}`}>
+                          {pos.dailyChangePct >= 0 ? '▲ +' : '▼ '}{pos.dailyChangePct.toFixed(2)}%
+                        </div>
                       </td>
 
                       {/* Current Market Value */}
@@ -435,25 +440,57 @@ export const PositionsTable: React.FC<PositionsTableProps> = ({
                                     const lotGainAbs = lotCurrentVal - lotInvested;
                                     const lotGainPct = lotInvested > 0 ? (lotGainAbs / lotInvested) * 100 : 0;
                                     const isTransfer = !!(lot.transferId || lot.parentTransactionId);
+                                    const isPartial = lot.qty > 0 && Math.abs(lot.qty - lot.remainingQty) > 1e-12;
+                                    const originalInvested = convertValue(
+                                      lot.qty * lot.buyPrice,
+                                      lot.currency || 'EUR',
+                                      selectedCurrency,
+                                      lot.originalDate.split('T')[0]
+                                    );
 
                                     return (
                                       <tr key={lot.id + '-' + idx} className="hover:bg-slate-800/20">
                                         <td className="py-2 px-2 text-slate-300">
-                                          {formatDateString(lot.originalDate, lang)}
+                                          <div className="font-bold text-slate-200">
+                                            {formatDateString(lot.originalDate, lang)}
+                                          </div>
+                                          {isPartial && (
+                                            <span className="text-[10px] text-amber-400 block font-normal">
+                                              Residuo lotto BUY del {formatDateString(lot.originalDate, lang)}
+                                            </span>
+                                          )}
                                         </td>
-                                        <td className="py-2 px-2 text-slate-300 flex items-center gap-1.5">
+                                        <td className="py-2 px-2 text-slate-300 flex items-center gap-1.5 flex-wrap">
                                           <span>{getPortfolioName(lot.portfolioId)}</span>
                                           {isTransfer && (
                                             <span className="text-[9px] bg-indigo-500/20 text-indigo-300 border border-indigo-500/30 px-1.5 py-0.2 rounded font-bold">
                                               TRASFERITO
                                             </span>
                                           )}
+                                          {isPartial ? (
+                                            <span className="text-[9px] bg-amber-500/20 text-amber-300 border border-amber-500/30 px-1.5 py-0.2 rounded font-bold" title="Lotto parzialmente scaricato da successive vendite">
+                                              LOTTO SCARICATO
+                                            </span>
+                                          ) : (
+                                            <span className="text-[9px] bg-emerald-500/20 text-emerald-300 border border-emerald-500/30 px-1.5 py-0.2 rounded font-bold">
+                                              INTERO
+                                            </span>
+                                          )}
                                         </td>
-                                        <td className="py-2 px-2 text-right text-slate-200 font-bold">
-                                          {lot.remainingQty.toLocaleString(lang, { maximumFractionDigits: 6 })}
+                                        <td className="py-2 px-2 text-right text-slate-200">
+                                          <div className="font-bold">
+                                            <QuantityDisplay value={lot.remainingQty} />
+                                          </div>
+                                          {isPartial && (
+                                            <span className="text-[10px] text-slate-400 font-mono block font-normal mt-0.5" title="Quantità acquistata nella transazione BUY originale (immutabile)">
+                                              Quantità acquistata nel BUY originale: {formatFullQuantity(lot.qty)}
+                                            </span>
+                                          )}
                                         </td>
                                         <td className="py-2 px-2 text-right text-amber-400">
-                                          {formatCurrency(lotBuyInDisplay, selectedCurrency)}
+                                          <div className="font-bold">
+                                            {formatCurrency(lotBuyInDisplay, selectedCurrency)}
+                                          </div>
                                           {lot.currency && lot.currency !== selectedCurrency && (
                                             <span className="text-[9px] text-slate-500 block">
                                               ({lot.buyPrice.toFixed(2)} {lot.currency})
@@ -461,7 +498,14 @@ export const PositionsTable: React.FC<PositionsTableProps> = ({
                                           )}
                                         </td>
                                         <td className="py-2 px-2 text-right text-slate-300">
-                                          {formatCurrency(lotInvested, selectedCurrency)}
+                                          <div className="font-bold text-slate-200">
+                                            {formatCurrency(lotInvested, selectedCurrency)}
+                                          </div>
+                                          {isPartial && (
+                                            <span className="text-[10px] text-slate-400 font-mono block font-normal mt-0.5" title="Costo della transazione BUY originale (immutabile)">
+                                              Costo nel BUY originale: {formatCurrency(originalInvested, selectedCurrency)}
+                                            </span>
+                                          )}
                                         </td>
                                         <td className="py-2 px-2 text-right text-white font-bold">
                                           {formatCurrency(lotCurrentVal, selectedCurrency)}
@@ -475,6 +519,30 @@ export const PositionsTable: React.FC<PositionsTableProps> = ({
                                     );
                                   })}
                                 </tbody>
+                                <tfoot>
+                                  <tr className="border-t border-slate-800 text-slate-300 text-xs font-semibold bg-slate-900/40">
+                                    <td colSpan={2} className="py-2 px-2 font-bold text-slate-400">
+                                      Totale Carico Storico Lotti Aperti ({pos.activeLots.length})
+                                    </td>
+                                    <td className="py-2 px-2 text-right font-bold text-slate-200">
+                                      <QuantityDisplay value={pos.sharesOwned} />
+                                    </td>
+                                    <td className="py-2 px-2 text-right text-amber-400 font-bold">
+                                      PMC {formatCurrency(pos.pmc, selectedCurrency)}
+                                    </td>
+                                    <td className="py-2 px-2 text-right font-bold text-slate-200">
+                                      {formatCurrency(pos.openLotsCostBasis ?? pos.totalCapitalInvested, selectedCurrency)}
+                                    </td>
+                                    <td className="py-2 px-2 text-right font-bold text-white">
+                                      {formatCurrency(pos.totalNominalValue, selectedCurrency)}
+                                    </td>
+                                    <td className="py-2 px-2 text-right">
+                                      <span className={`font-bold ${pos.gainAbsolute >= 0 ? 'text-emerald-400' : 'text-rose-500'}`}>
+                                        {pos.gainAbsolute >= 0 ? '+' : ''}{formatCurrency(pos.gainAbsolute, selectedCurrency)} ({pos.gainPercentage >= 0 ? '+' : ''}{pos.gainPercentage.toFixed(1)}%)
+                                      </span>
+                                    </td>
+                                  </tr>
+                                </tfoot>
                               </table>
                             </div>
                           </div>

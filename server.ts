@@ -19,14 +19,28 @@ const PORT = 3000;
 const DATA_DIR = path.join(process.cwd(), 'data');
 const DB_FILE = path.join(DATA_DIR, 'db.json');
 
-app.use(express.json());
+// Increase payload limits to prevent PayloadTooLargeError (HTTP 413) for large price caches and full backups
+app.use(express.json({ limit: '50mb' }));
+app.use(express.urlencoded({ limit: '50mb', extended: true }));
 
-// Determine storage mode option
-const STORAGE_MODE = process.env.STORAGE_MODE || 'browser';
+// Storage mode determination:
+// - Explicit env variable STORAGE_MODE ('local' or 'browser') takes priority
+// - Vercel serverless environment (process.env.VERCEL is set) defaults to 'browser'
+// - Docker / self-hosted Node server defaults to 'local'
+const isVercel = !!process.env.VERCEL || !!process.env.VERCEL_ENV;
+const STORAGE_MODE: 'local' | 'browser' = (
+  process.env.STORAGE_MODE === 'browser' || process.env.STORAGE_MODE === 'local'
+    ? (process.env.STORAGE_MODE as 'local' | 'browser')
+    : (isVercel ? 'browser' : 'local')
+);
 
-// Ensure data directory exists only if STORAGE_MODE is local
-if (STORAGE_MODE === 'local' && !fs.existsSync(DATA_DIR)) {
-  fs.mkdirSync(DATA_DIR, { recursive: true });
+// Ensure data directory exists
+if (!fs.existsSync(DATA_DIR)) {
+  try {
+    fs.mkdirSync(DATA_DIR, { recursive: true });
+  } catch (e) {
+    console.warn('Could not create data directory:', e);
+  }
 }
 
 // Initial DB state template
@@ -96,51 +110,55 @@ const initialDB = {
 // In-memory fallback if not in local storage mode
 let memoryDB = JSON.parse(JSON.stringify(initialDB));
 
-// Help helper to read database safely
+// Helper to read database safely from disk or memory
 function readDB() {
-  if (STORAGE_MODE !== 'local') {
-    return memoryDB;
-  }
   try {
-    if (!fs.existsSync(DB_FILE)) {
-      fs.writeFileSync(DB_FILE, JSON.stringify(initialDB, null, 2), 'utf-8');
-      return initialDB;
-    }
-    const content = fs.readFileSync(DB_FILE, 'utf-8');
-    const data = JSON.parse(content);
-    
-    // Ensure default inflation indices are configured if empty or missing
-    let mergedSettings = { ...initialDB.settings, ...data.settings };
-    if (!mergedSettings.inflationIndices || mergedSettings.inflationIndices.length === 0) {
-      mergedSettings.inflationIndices = initialDB.settings.inflationIndices;
-    }
+    if (fs.existsSync(DB_FILE)) {
+      const content = fs.readFileSync(DB_FILE, 'utf-8');
+      const data = JSON.parse(content);
+      
+      // Ensure default inflation indices are configured if empty or missing
+      let mergedSettings = { ...initialDB.settings, ...data.settings };
+      if (!mergedSettings.inflationIndices || mergedSettings.inflationIndices.length === 0) {
+        mergedSettings.inflationIndices = initialDB.settings.inflationIndices;
+      }
+      // If a password hash is present, passwordSet is guaranteed to be true
+      if (mergedSettings.passwordHash && typeof mergedSettings.passwordHash === 'string' && mergedSettings.passwordHash.length > 0) {
+        mergedSettings.passwordSet = true;
+      }
 
-    const result = { ...initialDB, ...data, settings: mergedSettings };
-    if (!result.transfers) {
-      result.transfers = [];
+      const result = {
+        ...initialDB,
+        ...data,
+        settings: mergedSettings,
+        accounts: Array.isArray(data.accounts) ? data.accounts : [],
+        portfolios: Array.isArray(data.portfolios) ? data.portfolios : [],
+        transactions: Array.isArray(data.transactions) ? data.transactions : [],
+        transfers: Array.isArray(data.transfers) ? data.transfers : [],
+        otherCosts: Array.isArray(data.otherCosts) ? data.otherCosts : [],
+        priceCache: (data.priceCache && typeof data.priceCache === 'object') ? data.priceCache : {}
+      };
+      memoryDB = result;
+      return result;
     }
-    if (!result.otherCosts) {
-      result.otherCosts = [];
-    }
-    return result;
   } catch (error) {
-    console.error('Error reading index database:', error);
-    return initialDB;
+    console.error('Error reading index database from disk, using fallback:', error);
   }
+  return memoryDB;
 }
 
-// Helper to write database safely/atomically
+// Helper to write database safely/atomically to disk
 function writeDB(data: any) {
-  if (STORAGE_MODE !== 'local') {
-    memoryDB = data;
-    return;
-  }
+  memoryDB = data;
   try {
+    if (!fs.existsSync(DATA_DIR)) {
+      fs.mkdirSync(DATA_DIR, { recursive: true });
+    }
     const tempFile = DB_FILE + '.tmp';
     fs.writeFileSync(tempFile, JSON.stringify(data, null, 2), 'utf-8');
     fs.renameSync(tempFile, DB_FILE);
   } catch (error) {
-    console.error('Error writing index database:', error);
+    console.error('Error writing database to disk:', error);
   }
 }
 
@@ -206,6 +224,34 @@ app.get('/api/db', (req, res) => {
     }
   };
   res.json(cleanDb);
+});
+
+app.post('/api/db', (req, res) => {
+  const newDb = req.body;
+  if (!newDb || typeof newDb !== 'object') {
+    return res.status(400).json({ error: 'Invalid database payload.' });
+  }
+  const currentDb = readDB();
+  const passwordHash = currentDb.settings?.passwordHash;
+  const mergedSettings = {
+    ...currentDb.settings,
+    ...(newDb.settings || {}),
+    passwordHash: (newDb.settings?.passwordHash !== undefined) ? newDb.settings.passwordHash : passwordHash
+  };
+  if (mergedSettings.passwordHash && typeof mergedSettings.passwordHash === 'string' && mergedSettings.passwordHash.length > 0) {
+    mergedSettings.passwordSet = true;
+  }
+  const fullDb = {
+    settings: mergedSettings,
+    accounts: Array.isArray(newDb.accounts) ? newDb.accounts : (currentDb.accounts || []),
+    portfolios: Array.isArray(newDb.portfolios) ? newDb.portfolios : (currentDb.portfolios || []),
+    transactions: Array.isArray(newDb.transactions) ? newDb.transactions : (currentDb.transactions || []),
+    transfers: Array.isArray(newDb.transfers) ? newDb.transfers : (currentDb.transfers || []),
+    otherCosts: Array.isArray(newDb.otherCosts) ? newDb.otherCosts : (currentDb.otherCosts || []),
+    priceCache: (newDb.priceCache && typeof newDb.priceCache === 'object') ? newDb.priceCache : (currentDb.priceCache || {})
+  };
+  writeDB(fullDb);
+  res.json({ success: true });
 });
 
 app.post('/api/db/settings', (req, res) => {

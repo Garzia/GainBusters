@@ -263,6 +263,7 @@ export default function InteractiveChart({
         periodInvested: 0,
         periodSells: 0,
         periodNetContributions: 0,
+        periodNetCapital: 0,
         periodCommissions: 0,
         periodNetGain: 0,
         totalDays: 0
@@ -302,6 +303,7 @@ export default function InteractiveChart({
   const periodInitialValue = periodPerf.periodInitialValue;
   const periodFinalValue = periodPerf.periodFinalValue;
   const periodInvested = periodPerf.periodInvested;
+  const periodNetCapital = periodPerf.periodNetCapital;
   const periodCommissions = periodPerf.periodCommissions;
   const periodNetGain = periodPerf.periodNetGain;
   const periodMaxDrawdown = periodPerf.maxDrawdown;
@@ -707,12 +709,12 @@ export default function InteractiveChart({
                 <span className="text-[8px] text-slate-500 leading-tight mt-1 line-clamp-2 shrink-0" title={t.maxDrawdownDesc}>{t.maxDrawdownDesc}</span>
               </div>
 
-              {/* Tile 5: Investito nel Periodo */}
+              {/* Tile 5: Capitale Netto Investito */}
               <div className="bg-slate-900/10 p-3 h-full min-h-[7rem] sm:min-h-[6.5rem] flex flex-col rounded-xl border border-slate-800/60 hover:border-slate-700/60 transition duration-200">
                 <span className="text-[9px] sm:text-[10px] text-slate-400 font-extrabold uppercase tracking-wide font-mono line-clamp-1 mb-1" title={t.netCapitalInvestedLabel}>{t.netCapitalInvestedLabel}</span>
                 <div className="flex-1 flex items-center min-w-0 overflow-hidden">
                   <span className="text-xs sm:text-sm md:text-sm font-bold font-mono text-slate-200 break-all shrink-0">
-                    {periodInvested.toLocaleString(undefined, { minimumFractionDigits: 2 })} {currencySymbol}
+                    {periodNetCapital.toLocaleString(undefined, { minimumFractionDigits: 2 })} {currencySymbol}
                   </span>
                 </div>
                 <span className="text-[8px] text-slate-500 leading-tight mt-1 line-clamp-2 shrink-0" title={t.capitalInvestedDesc}>{t.capitalInvestedDesc}</span>

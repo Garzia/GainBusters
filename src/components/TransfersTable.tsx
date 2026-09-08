@@ -1,6 +1,7 @@
 import React, { useRef } from 'react';
 import { RefreshCw, Plus, Edit, Trash2, ArrowRight, Download, Upload } from 'lucide-react';
 import { TranslationDictionary, Transfer } from '../types';
+import { QuantityDisplay } from './QuantityDisplay';
 
 export interface TransferRecord {
   id: string;
@@ -17,8 +18,10 @@ export interface TransferRecord {
   destBrokerName: string;
   sourceCommission: number;
   sourceCommissionCurrency: string;
+  sourceCommissionPaymentMode?: 'EXTERNAL' | 'ASSET';
   destCommission: number;
   destCommissionCurrency: string;
+  destCommissionPaymentMode?: 'EXTERNAL' | 'ASSET';
   criteria: 'FIFO' | 'LIFO';
   notes: string;
   childCount?: number;
@@ -70,8 +73,10 @@ export const TransfersTable: React.FC<TransfersTableProps> = ({
           destPortfolioId: t.destPortfolioId,
           sourceCommission: t.sourceCommission,
           sourceCommissionCurrency: t.sourceCommissionCurrency,
+          sourceCommissionPaymentMode: t.sourceCommissionPaymentMode || 'EXTERNAL',
           destCommission: t.destCommission,
           destCommissionCurrency: t.destCommissionCurrency,
+          destCommissionPaymentMode: t.destCommissionPaymentMode || 'EXTERNAL',
           criteria: t.criteria,
           notes: t.notes
         }));
@@ -99,8 +104,10 @@ export const TransfersTable: React.FC<TransfersTableProps> = ({
       'Valuta_Prezzo',
       'Comm_Uscita',
       'Valuta_Comm_Uscita',
+      'Tipo_Comm_Uscita',
       'Comm_Entrata',
       'Valuta_Comm_Entrata',
+      'Tipo_Comm_Entrata',
       'Criterio',
       'Note'
     ];
@@ -117,8 +124,10 @@ export const TransfersTable: React.FC<TransfersTableProps> = ({
       r.priceCurrency || 'EUR',
       r.sourceCommission || 0,
       r.sourceCommissionCurrency || 'EUR',
+      r.sourceCommissionPaymentMode || 'EXTERNAL',
       r.destCommission || 0,
       r.destCommissionCurrency || 'EUR',
+      r.destCommissionPaymentMode || 'EXTERNAL',
       r.criteria,
       `"${(r.notes || '').replace(/"/g, '""')}"`
     ]);
@@ -166,10 +175,12 @@ export const TransfersTable: React.FC<TransfersTableProps> = ({
                     priceCurrency: cols[9] || 'EUR',
                     sourceCommission: parseFloat(cols[10]) || 0,
                     sourceCommissionCurrency: cols[11] || 'EUR',
-                    destCommission: parseFloat(cols[12]) || 0,
-                    destCommissionCurrency: cols[13] || 'EUR',
-                    criteria: (cols[14] === 'LIFO' ? 'LIFO' : 'FIFO'),
-                    notes: cols[15] || ''
+                    sourceCommissionPaymentMode: (cols[12] === 'ASSET' ? 'ASSET' : 'EXTERNAL'),
+                    destCommission: parseFloat(cols[13]) || 0,
+                    destCommissionCurrency: cols[14] || 'EUR',
+                    destCommissionPaymentMode: (cols[15] === 'ASSET' ? 'ASSET' : 'EXTERNAL'),
+                    criteria: (cols[16] === 'LIFO' ? 'LIFO' : 'FIFO'),
+                    notes: cols[17] || ''
                   });
                 }
               }
@@ -298,7 +309,7 @@ export const TransfersTable: React.FC<TransfersTableProps> = ({
                       {rec.symbol}
                     </td>
                     <td className="py-2.5 px-4 text-amber-400 font-bold whitespace-nowrap">
-                      <span>{formatFullQuantity(rec.qty)}</span>
+                      <QuantityDisplay value={rec.qty} />
                       {rec.childCount && rec.childCount > 1 ? (
                         <span
                           title={rec.childLotsSummary || `${rec.childCount} lotti generati`}
@@ -333,14 +344,22 @@ export const TransfersTable: React.FC<TransfersTableProps> = ({
                     </td>
                     <td className="py-2.5 px-4 text-rose-400">
                       {rec.sourceCommission > 0 ? (
-                        <span>{formatCurrency(rec.sourceCommission, rec.sourceCommissionCurrency || 'EUR')}</span>
+                        rec.sourceCommissionPaymentMode === 'ASSET' ? (
+                          <QuantityDisplay value={rec.sourceCommission} assetSymbol={rec.symbol} />
+                        ) : (
+                          <span>{formatCurrency(rec.sourceCommission, rec.sourceCommissionCurrency || 'EUR')}</span>
+                        )
                       ) : (
                         <span className="text-slate-600">-</span>
                       )}
                     </td>
                     <td className="py-2.5 px-4 text-rose-400">
                       {rec.destCommission > 0 ? (
-                        <span>{formatCurrency(rec.destCommission, rec.destCommissionCurrency || 'EUR')}</span>
+                        rec.destCommissionPaymentMode === 'ASSET' ? (
+                          <QuantityDisplay value={rec.destCommission} assetSymbol={rec.symbol} />
+                        ) : (
+                          <span>{formatCurrency(rec.destCommission, rec.destCommissionCurrency || 'EUR')}</span>
+                        )
                       ) : (
                         <span className="text-slate-600">-</span>
                       )}
@@ -413,7 +432,7 @@ export const TransfersTable: React.FC<TransfersTableProps> = ({
                   <div>
                     <span className="text-[10px] text-slate-500 block uppercase font-sans font-bold">Quantità</span>
                     <div className="flex items-center gap-1.5">
-                      <span className="text-amber-400 font-bold">{formatFullQuantity(rec.qty)}</span>
+                      <QuantityDisplay value={rec.qty} className="text-amber-400 font-bold" />
                       {rec.childCount && rec.childCount > 1 ? (
                         <span className="px-1.5 py-0.2 text-[9px] font-sans font-semibold rounded bg-amber-500/15 text-amber-300 border border-amber-500/25">
                           {rec.childCount} lotti

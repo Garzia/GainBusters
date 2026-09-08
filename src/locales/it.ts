@@ -45,7 +45,7 @@ export const itLocale: LanguagePhrases = {
   lotPortfolio: 'Portafoglio / Broker',
   lotRemainingQty: 'Qtà Residua',
   lotPurchasePrice: 'Prezzo Unitario Carico',
-  lotTotalInvested: 'Capitale Lottato',
+  lotTotalInvested: 'Carico Storico Residuo',
   lotCurrentValue: 'Valore Attuale Lotto',
   lotGainLoss: 'P/L Lotto',
   noPositionsFound: 'Nessuna posizione aperta presente nel perimetro e periodo selezionati.',

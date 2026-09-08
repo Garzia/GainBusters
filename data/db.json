@@ -1,0 +1,126 @@
+{
+  "settings": {
+    "theme": "dark",
+    "defaultCurrency": "EUR",
+    "passwordHash": "ef797c8118f02dfb649607dd5d3f8c7623048c9c063d532cc95c5ed7a898a64f",
+    "passwordSet": false,
+    "selectedInflationId": "NIC",
+    "inflationIndices": [
+      {
+        "id": "NIC",
+        "name": "NIC",
+        "description": "Indice Nazionale dei prezzi al consumo per l'intera collettività",
+        "link": "https://www.istat.it/it/archivio/prezzi-al-consumo",
+        "values": [
+          {
+            "year": 2020,
+            "rate": 0.002
+          },
+          {
+            "year": 2021,
+            "rate": 0.019
+          },
+          {
+            "year": 2022,
+            "rate": 0.081
+          },
+          {
+            "year": 2023,
+            "rate": 0.057
+          },
+          {
+            "year": 2024,
+            "rate": 0.008
+          },
+          {
+            "year": 2025,
+            "rate": 0.012
+          },
+          {
+            "year": 2026,
+            "rate": 0.015
+          }
+        ]
+      },
+      {
+        "id": "FOI",
+        "name": "FOI",
+        "description": "Indice dei prezzi al consumo per le Famiglie di Operai e Impiegati",
+        "link": "https://www.istat.it/it/archivio/prezzi-al-consumo",
+        "values": [
+          {
+            "year": 2020,
+            "rate": 0.001
+          },
+          {
+            "year": 2021,
+            "rate": 0.019
+          },
+          {
+            "year": 2022,
+            "rate": 0.081
+          },
+          {
+            "year": 2023,
+            "rate": 0.054
+          },
+          {
+            "year": 2024,
+            "rate": 0.008
+          },
+          {
+            "year": 2025,
+            "rate": 0.011
+          },
+          {
+            "year": 2026,
+            "rate": 0.014
+          }
+        ]
+      },
+      {
+        "id": "IPCA",
+        "name": "IPCA",
+        "description": "Indice dei prezzi al consumo Armonizzato per i paesi dell'Unione Europea",
+        "link": "https://www.istat.it/it/archivio/prezzi-al-consumo",
+        "values": [
+          {
+            "year": 2020,
+            "rate": 0.002
+          },
+          {
+            "year": 2021,
+            "rate": 0.019
+          },
+          {
+            "year": 2022,
+            "rate": 0.087
+          },
+          {
+            "year": 2023,
+            "rate": 0.059
+          },
+          {
+            "year": 2024,
+            "rate": 0.009
+          },
+          {
+            "year": 2025,
+            "rate": 0.013
+          },
+          {
+            "year": 2026,
+            "rate": 0.016
+          }
+        ]
+      }
+    ],
+    "lang": "it"
+  },
+  "accounts": [],
+  "portfolios": [],
+  "transactions": [],
+  "transfers": [],
+  "otherCosts": [],
+  "priceCache": {}
+}

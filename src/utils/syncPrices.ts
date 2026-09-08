@@ -23,7 +23,7 @@ const CRYPTO_LIST = new Set([
   'TIA', 'APT', 'SEI', 'RUNE', 'PENDLE', 'WIF', 'BONK', 'FLOKI'
 ]);
 
-function isCryptoTicker(symbol: string): boolean {
+export function isCryptoTicker(symbol: string): boolean {
   const s = symbol.toUpperCase().trim().replace('=X', '').replace(/[\/-]/g, '');
   if (CRYPTO_LIST.has(s)) return true;
   for (const c of CRYPTO_LIST) {
@@ -90,43 +90,84 @@ function resolveYahooSymbol(symbol: string): { yahooSymbol: string; isInverted: 
 
 // Fetch historical prices from Yahoo Finance
 async function fetchYahooFinancePrices(symbol: string, startDateStr: string, endDateStr: string): Promise<{ [date: string]: number }> {
-  const { yahooSymbol, isInverted } = resolveYahooSymbol(symbol);
+  const { yahooSymbol, isInverted, isCrypto } = resolveYahooSymbol(symbol);
 
   const startSec = Math.floor(new Date(startDateStr).getTime() / 1000);
   const endSec = Math.floor(new Date(endDateStr).getTime() / 1000) + 86400;
 
-  const proxyUrl = `/api/yahoo/${encodeURIComponent(yahooSymbol)}?period1=${startSec}&period2=${endSec}&interval=1d`;
-  console.log(`[Yahoo Finance Request] Fetching data for ${symbol} as ${yahooSymbol}: ${proxyUrl}`);
-
-  const res = await fetch(proxyUrl, { method: 'GET', headers: { 'Accept': 'application/json' } });
-  if (!res.ok) throw new Error(`Yahoo status ${res.status}`);
-  const parsedData = await res.json();
-  
-  const chart = parsedData?.chart;
-  const result = chart?.result?.[0];
-  if (!result) {
-    throw new Error(`Invalid Yahoo Finance chart response structure for ${yahooSymbol}`);
+  // List of symbol variants to try (e.g. if European ETF without exchange suffix)
+  const candidateSymbols = [yahooSymbol];
+  const isBaseAlpha = /^[A-Z0-9]+$/.test(symbol.trim().toUpperCase());
+  if (isBaseAlpha && !symbol.includes('.') && !symbol.includes('=X') && !isCrypto) {
+    candidateSymbols.push(`${symbol.trim().toUpperCase()}.MI`);
+    candidateSymbols.push(`${symbol.trim().toUpperCase()}.DE`);
   }
 
-  const timestamps: number[] = result.timestamp || [];
-  const closeQuotes: (number | null)[] = result.indicators?.quote?.[0]?.close || [];
-  const priceMap: { [date: string]: number } = {};
+  let lastError: any = null;
 
-  let lastValidPrice = 0;
-  for (let i = 0; i < timestamps.length; i++) {
-    const ts = timestamps[i];
-    let price = closeQuotes[i];
-    const dateStr = new Date(ts * 1000).toISOString().split('T')[0];
+  for (const candidate of candidateSymbols) {
+    try {
+      const proxyUrl = `/api/yahoo/${encodeURIComponent(candidate)}?period1=${startSec}&period2=${endSec}&interval=1d`;
+      console.log(`[Yahoo Finance Request] Fetching data for ${symbol} as ${candidate}: ${proxyUrl}`);
 
-    if (price !== null && !isNaN(price) && price > 0) {
-      if (isInverted && price > 0) price = 1 / price;
-      priceMap[dateStr] = Number(price.toFixed(price < 1 ? 8 : 4));
-      lastValidPrice = price;
-    } else if (lastValidPrice > 0) {
-      priceMap[dateStr] = Number(lastValidPrice.toFixed(lastValidPrice < 1 ? 8 : 4));
+      const res = await fetch(proxyUrl, { method: 'GET', headers: { 'Accept': 'application/json' } });
+      if (!res.ok) {
+        throw new Error(`Yahoo status ${res.status} for ${candidate}`);
+      }
+      const parsedData = await res.json();
+      const chart = parsedData?.chart;
+      const result = chart?.result?.[0];
+      if (!result) {
+        throw new Error(`Invalid Yahoo Finance chart response structure for ${candidate}`);
+      }
+
+      const timestamps: number[] = result.timestamp || [];
+      const closeQuotes: (number | null)[] = result.indicators?.quote?.[0]?.close || [];
+      const priceMap: { [date: string]: number } = {};
+
+      const meta = result.meta || {};
+      const regularMarketPrice = meta.regularMarketPrice;
+      const regularMarketTime = meta.regularMarketTime;
+
+      let lastValidPrice = 0;
+      for (let i = 0; i < timestamps.length; i++) {
+        const ts = timestamps[i];
+        let price = closeQuotes[i];
+        const dateStr = new Date(ts * 1000).toISOString().split('T')[0];
+
+        // If the last candle has a null close (common for European ETFs after close or on weekends),
+        // fallback to meta.regularMarketPrice if valid
+        if ((price === null || isNaN(price) || price <= 0) && i === timestamps.length - 1 && regularMarketPrice > 0) {
+          price = regularMarketPrice;
+        }
+
+        if (price !== null && !isNaN(price) && price > 0) {
+          if (isInverted && price > 0) price = 1 / price;
+          priceMap[dateStr] = Number(price.toFixed(price < 1 ? 8 : 4));
+          lastValidPrice = price;
+        } else if (lastValidPrice > 0) {
+          priceMap[dateStr] = Number(lastValidPrice.toFixed(lastValidPrice < 1 ? 8 : 4));
+        }
+      }
+
+      // Ensure the latest regular market price is also attached to its session date
+      if (regularMarketPrice > 0 && regularMarketTime) {
+        const regDateStr = new Date(regularMarketTime * 1000).toISOString().split('T')[0];
+        let regPrice = regularMarketPrice;
+        if (isInverted && regPrice > 0) regPrice = 1 / regPrice;
+        priceMap[regDateStr] = Number(regPrice.toFixed(regPrice < 1 ? 8 : 4));
+      }
+
+      if (Object.keys(priceMap).length > 0) {
+        return priceMap;
+      }
+    } catch (err) {
+      lastError = err;
+      // Continue to next candidate symbol if available
     }
   }
-  return priceMap;
+
+  throw lastError || new Error(`No prices found for ${symbol}`);
 }
 
 // Fallback fetch from Binance for crypto
@@ -287,10 +328,15 @@ export async function syncPricesLocally(
       });
     }
 
-    const missingDates = allDates.filter(d => !newPriceCache[symbolUpper][d]);
+    const sevenDaysAgo = new Date();
+    sevenDaysAgo.setDate(sevenDaysAgo.getDate() - 7);
+    const sevenDaysAgoStr = sevenDaysAgo.toISOString().split('T')[0];
 
-    if (missingDates.length > 0) {
-      let fetchStartDateStr = missingDates[0];
+    const missingDates = allDates.filter(d => !newPriceCache[symbolUpper][d]);
+    const shouldFetch = force || missingDates.length > 0 || !newPriceCache[symbolUpper][todayStr];
+
+    if (shouldFetch) {
+      let fetchStartDateStr = missingDates.length > 0 ? missingDates[0] : sevenDaysAgoStr;
       const fetchStartObj = new Date(fetchStartDateStr);
       fetchStartObj.setDate(fetchStartObj.getDate() - 7);
       const optimizedStartStr = fetchStartObj.toISOString().split('T')[0];
@@ -319,33 +365,32 @@ export async function syncPricesLocally(
 
       if (fetchSuccessful) {
         hasAnySuccess = true;
-      }
+        updatedAnyCache = true;
 
-      // Populate database for all dates
-      let currentPriceValue = firstTxPrice;
+        // Store authentic market closing prices from API
+        Object.keys(fetchedPrices).forEach(date => {
+          if (fetchedPrices[date] > 0) {
+            newPriceCache[symbolUpper][date] = fetchedPrices[date];
+          }
+        });
 
-      allDates.forEach((date) => {
-        if (fetchSuccessful && fetchedPrices[date] !== undefined) {
-          newPriceCache[symbolUpper][date] = fetchedPrices[date];
-          currentPriceValue = fetchedPrices[date];
-        } else if (fetchSuccessful && date >= finalFetchStartStr) {
-          if (!newPriceCache[symbolUpper][date]) {
-             newPriceCache[symbolUpper][date] = currentPriceValue;
-          } else {
-             currentPriceValue = newPriceCache[symbolUpper][date];
-          }
-        } else if (newPriceCache[symbolUpper][date] !== undefined) {
-          currentPriceValue = newPriceCache[symbolUpper][date];
-        } else {
-          const exactMatchTx = symbolTransactions.find(t => t.date.split('T')[0] === date);
-          if (exactMatchTx) {
-            newPriceCache[symbolUpper][date] = exactMatchTx.price;
-            currentPriceValue = exactMatchTx.price;
-          } else {
-            newPriceCache[symbolUpper][date] = currentPriceValue;
-          }
+        // For non-crypto instruments (stocks, ETFs, bonds), remove any artificial weekend
+        // entries that were cloned from preceding Fridays in previous syncs
+        if (!isCrypto && !isCryptoTicker(symbolUpper)) {
+          Object.keys(newPriceCache[symbolUpper]).forEach(d => {
+            const dayOfWeek = new Date(d + 'T12:00:00Z').getUTCDay();
+            if (dayOfWeek === 0 || dayOfWeek === 6) {
+              delete newPriceCache[symbolUpper][d];
+            }
+          });
         }
-      });
+      } else {
+        // If fetch failed completely and we have zero price points, seed with transaction price
+        if (Object.keys(newPriceCache[symbolUpper]).length === 0) {
+          newPriceCache[symbolUpper][todayStr] = firstTxPrice;
+        }
+      }
+    }
 
       // Mirror aliases if crypto: e.g. BTC -> BTC-EUR, BTCEUR=X, BTCEUR, BTC/EUR, EURBTC=X, etc.
       let baseCrypto = symbolUpper.replace('=X', '').replace(/[\/-]/g, '');
@@ -401,7 +446,6 @@ export async function syncPricesLocally(
       
       updatedAnyCache = true;
     }
-  }
 
   // If no successful fetches occurred and we were syncing non-empty symbols, log info
   if (symbols.length > 0 && !hasAnySuccess && !updatedAnyCache) {

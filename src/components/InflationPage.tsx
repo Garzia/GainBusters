@@ -1,6 +1,7 @@
 import React, { useState } from 'react';
 import { DBState, InflationSetting, LanguagePhrases } from '../types.ts';
 import { Trash2, Coins, Plus, Check } from 'lucide-react';
+import { ModalPortal } from './ModalPortal';
 
 interface InflationPageProps {
   db: DBState;
@@ -412,41 +413,48 @@ export const InflationPage: React.FC<InflationPageProps> = ({
       </div>
 
       {indexToDelete && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-950/80 backdrop-blur-md animate-fade-in">
-          <div className="max-w-md w-full bg-[#0d1527] border border-rose-500/30 rounded-2xl p-6 shadow-2xl relative overflow-hidden flex flex-col">
-            <div className="absolute top-0 right-0 w-32 h-32 bg-rose-500/5 rounded-full blur-2xl pointer-events-none"></div>
-            
-            <div className="flex items-start gap-4 mb-5">
-              <span className="p-3 bg-rose-500/10 rounded-xl text-rose-400 border border-rose-500/20 shrink-0">
-                <Trash2 className="w-6 h-6 animate-pulse" />
-              </span>
-              <div className="flex-1">
-                <h3 className="text-lg font-black text-white">{t.confirmDeleteTitle}</h3>
-                <p className="text-sm text-slate-300 mt-2 font-medium leading-relaxed">{t.confirmDeleteIndex}</p>
+        <ModalPortal isOpen={!!indexToDelete}>
+          <div
+            className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-950/80 backdrop-blur-md overflow-hidden animate-fade-in"
+            onClick={(e) => {
+              if (e.target === e.currentTarget) setIndexToDelete(null);
+            }}
+          >
+            <div className="max-w-md w-full bg-[#0d1527] border border-rose-500/30 rounded-2xl p-6 shadow-2xl relative overflow-hidden flex flex-col max-h-[calc(100vh-2rem)] my-auto">
+              <div className="absolute top-0 right-0 w-32 h-32 bg-rose-500/5 rounded-full blur-2xl pointer-events-none"></div>
+              
+              <div className="flex items-start gap-4 mb-5 overflow-y-auto custom-scrollbar flex-1 min-h-0">
+                <span className="p-3 bg-rose-500/10 rounded-xl text-rose-400 border border-rose-500/20 shrink-0">
+                  <Trash2 className="w-6 h-6 animate-pulse" />
+                </span>
+                <div className="flex-1">
+                  <h3 className="text-lg font-black text-white">{t.confirmDeleteTitle}</h3>
+                  <p className="text-sm text-slate-300 mt-2 font-medium leading-relaxed">{t.confirmDeleteIndex}</p>
+                </div>
+              </div>
+              
+              <div className="flex items-center justify-end gap-3 pt-3 border-t border-slate-800/80 shrink-0">
+                <button
+                  type="button"
+                  onClick={() => setIndexToDelete(null)}
+                  className="px-4 py-2 text-xs font-bold text-slate-400 hover:text-white bg-slate-900 border border-slate-800 hover:border-slate-700 rounded-xl transition-all cursor-pointer"
+                >
+                  {t.cancelBtn}
+                </button>
+                <button
+                  type="button"
+                  onClick={() => {
+                    executeDeleteIndex(indexToDelete);
+                    setIndexToDelete(null);
+                  }}
+                  className="px-5 py-2 text-xs font-black text-white bg-rose-600 hover:bg-rose-500 active:bg-rose-700 rounded-xl transition-all shadow-[0_0_15px_rgba(239,68,68,0.2)] cursor-pointer"
+                >
+                  {t.confirmBtn}
+                </button>
               </div>
             </div>
-            
-            <div className="flex items-center justify-end gap-3 pt-3 border-t border-slate-800/80">
-              <button
-                type="button"
-                onClick={() => setIndexToDelete(null)}
-                className="px-4 py-2 text-xs font-bold text-slate-400 hover:text-white bg-slate-900 border border-slate-800 hover:border-slate-700 rounded-xl transition-all cursor-pointer"
-              >
-                {t.cancelBtn}
-              </button>
-              <button
-                type="button"
-                onClick={() => {
-                  executeDeleteIndex(indexToDelete);
-                  setIndexToDelete(null);
-                }}
-                className="px-5 py-2 text-xs font-black text-white bg-rose-600 hover:bg-rose-500 active:bg-rose-700 rounded-xl transition-all shadow-[0_0_15px_rgba(239,68,68,0.2)] cursor-pointer"
-              >
-                {t.confirmBtn}
-              </button>
-            </div>
           </div>
-        </div>
+        </ModalPortal>
       )}
     </div>
   );

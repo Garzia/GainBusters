@@ -45,7 +45,7 @@ export const enLocale: LanguagePhrases = {
   lotPortfolio: 'Portfolio / Broker',
   lotRemainingQty: 'Remaining Qty',
   lotPurchasePrice: 'Unit Cost Price',
-  lotTotalInvested: 'Invested Capital',
+  lotTotalInvested: 'Historical Cost Basis',
   lotCurrentValue: 'Current Lot Value',
   lotGainLoss: 'Lot P/L',
   noPositionsFound: 'No open positions found for the selected scope and time frame.',
