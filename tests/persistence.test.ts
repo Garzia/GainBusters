@@ -179,4 +179,63 @@ describe('Persistence Architecture - StorageService Regression Tests', () => {
     assert.equal(loadedDb?.transfers.length, 1);
     assert.equal(loadedDb?.transfers[0].id, 'tr-1');
   });
+
+  it('4. should safely encrypt and decrypt large database payloads without Maximum call stack size exceeded', async () => {
+    // Generate a database state with hundreds of transactions and large priceCache > 200KB
+    const largeDb: DBState = {
+      ...mockInitialDb,
+      transactions: Array.from({ length: 500 }, (_, i) => ({
+        id: `tx-${i}`,
+        portfolioId: 'port-1',
+        date: '2025-01-15T10:00:00.000Z',
+        type: TransactionType.BUY,
+        symbol: `STOCK_${i % 50}`,
+        qty: 10 + i,
+        price: 100 + (i % 20),
+        commission: 2.5,
+        currency: Currency.EUR,
+        commissionCurrency: 'EUR',
+        notes: `Simulated transaction record #${i} with extended textual metadata for testing payload limits`
+      })),
+      priceCache: Object.fromEntries(
+        Array.from({ length: 200 }, (_, i) => [
+          `STOCK_${i}`,
+          Object.fromEntries(
+            Array.from({ length: 30 }, (__, d) => [
+              `2025-01-${String(d + 1).padStart(2, '0')}`,
+              100 + d + (i % 10)
+            ])
+          )
+        ])
+      )
+    };
+
+    const jsonStr = JSON.stringify(largeDb);
+    assert.ok(jsonStr.length > 70000, `Payload size is ${jsonStr.length} bytes (exceeds 65536 byte function argument limit)`);
+
+    let mockFileContent = '';
+    const mockFileHandle = {
+      name: 'large_test_db.json',
+      createWritable: async () => ({
+        write: async (content: string) => { mockFileContent = content; },
+        close: async () => {}
+      }),
+      getFile: async () => ({
+        text: async () => mockFileContent
+      })
+    };
+
+    storageService.setFileHandle(mockFileHandle as any);
+    storageService.setBrowserPassword('secure-large-pass-2025');
+
+    // Saving must not throw RangeError: Maximum call stack size exceeded
+    await storageService.saveDatabaseState(largeDb);
+    assert.ok(mockFileContent.length > 50000, 'Encrypted file content was successfully written');
+
+    // Loading and decrypting must successfully restore all 500 transactions
+    const restoredDb = await storageService.loadDatabaseState('secure-large-pass-2025');
+    assert.notEqual(restoredDb, null);
+    assert.equal(restoredDb?.transactions.length, 500);
+    assert.equal(restoredDb?.transactions[499].id, 'tx-499');
+  });
 });

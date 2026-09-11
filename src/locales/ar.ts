@@ -521,5 +521,27 @@ export const arLocale: LanguagePhrases = {
   infoPmc: 'معلومات متوسط التكلفة',
   pmcFullTitle: 'متوسط سعر الشراء (PMC)',
   createFirstTransfer: 'تسجيل أول تحويل بين المحافظ',
-  transfersCountLabel: 'تحويلات مسجلة'
+  transfersCountLabel: 'تحويلات مسجلة',
+
+  // Dividend keys
+  dividendsTab: 'الأرباح الموزعة',
+  dividendsTitle: 'نظرة عامة على الأرباح الموزعة',
+  dividendsDesc: 'ملخص إجمالي الأرباح الموزعة المستلمة لكل محفظة وتواريخ الدفع وسجل التدفقات النقدية.',
+  dividendLabel: 'توزيع أرباح',
+  totalDividendsReceived: 'إجمالي الأرباح المستلمة',
+  dividendsPerPortfolio: 'الأرباح الموزعة لكل محفظة',
+  historicalPaymentDates: 'سجل تواريخ الدفع',
+  paymentDate: 'تاريخ الدفع',
+  grossDividend: 'إجمالي الربح الموزع',
+  withholdingTax: 'الضريبة المقتطعة / الرسوم',
+  netDividend: 'صافي الربح الموزع',
+  registerDividendBtn: 'تسجيل ربح موزع',
+  noDividendsRecorded: 'لا توجد أرباح موزعة مسجلة حتى الآن.',
+  noDividendsMatchingCriteria: 'لا توجد سجلات أرباح مطابقة لمعايير التصفية.',
+  dividendPaymentsCount: 'عمليات الدفع',
+  latestPaymentDate: 'آخر دفعة',
+  allPortfoliosOption: 'جميع المحافظ',
+  dividendPerShareLabel: 'الربح لكل سهم',
+  topDividendPayerLabel: 'الأعلى توزيعاً',
+  viewDividendsTooltip: 'عرض سجل الأرباح لهذه المحفظة'
 };

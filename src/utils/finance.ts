@@ -3,7 +3,17 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import { Transaction, TransactionType, OtherCost, Transfer } from '../types';
+import { Transaction, TransactionType, OtherCost, Transfer, Portfolio, Account, InstrumentGroup } from '../types';
+
+export function matchesSymbol(sym: string, targetSymbol?: string | string[] | null): boolean {
+  if (!targetSymbol) return true;
+  const s = sym.toUpperCase().trim();
+  if (Array.isArray(targetSymbol)) {
+    if (targetSymbol.length === 0) return true;
+    return targetSymbol.some(ts => ts.toUpperCase().trim() === s);
+  }
+  return s === targetSymbol.toUpperCase().trim();
+}
 
 export interface PortfolioLot {
   id: string;
@@ -107,7 +117,7 @@ export function calculateHoldingsAndLots(
   activePortIds: string[],
   convertValue: (amount: number, from: string, to: string, date: string) => number,
   selectedCurrency: string,
-  targetSymbol?: string | null,
+  targetSymbol?: string | string[] | null,
   asOfDate?: string
 ): {
   activeLots: PortfolioLot[];
@@ -246,7 +256,7 @@ export function calculateHoldingsAndLots(
     if (!activePortIds.includes(pId)) return;
     lotsByPortfolio[pId].forEach((lot) => {
       if (lot.remainingQty > 1e-12) {
-        if (!targetSymbol || lot.symbol === targetSymbol.toUpperCase().trim()) {
+        if (matchesSymbol(lot.symbol, targetSymbol)) {
           // Explicit immutable / derived properties
           lot.remainingQty = cleanFloatNoise(lot.remainingQty);
           lot.originalQty = lot.qty;
@@ -440,7 +450,7 @@ export function calculateInvestedCapital(
   includeCommissions: boolean,
   selectedCurrency: string,
   convertValue: (amount: number, from: string, to: string, date: string) => number,
-  targetSymbol?: string | null,
+  targetSymbol?: string | string[] | null,
   asOfDate?: string
 ): InvestedCapitalBreakdown {
   const txFiltered = asOfDate
@@ -461,7 +471,7 @@ export function calculateInvestedCapital(
   });
 
   const activeTx = txFiltered.filter(
-    t => activePortIds.includes(t.portfolioId) && (!targetSymbol || t.symbol.toUpperCase() === targetSymbol.toUpperCase())
+    t => activePortIds.includes(t.portfolioId) && matchesSymbol(t.symbol, targetSymbol)
   );
 
   let totalCommissionsPaid = 0;
@@ -671,7 +681,7 @@ export function calculateFinancialMetrics(
   getTickerCurrency: (sym: string) => string,
   todayStr: string,
   yesterdayStr: string,
-  targetSymbol?: string | null,
+  targetSymbol?: string | string[] | null,
   getDailyPricePair?: (sym: string, fallbackPriceNative: number) => DailyPricePair
 ): FinancialMetricsResult {
   const { tickerHoldings } = calculateHoldingsAndLots(
@@ -683,7 +693,7 @@ export function calculateFinancialMetrics(
   );
 
   const activeTx = allTransactions.filter(
-    t => activePortIds.includes(t.portfolioId) && (!targetSymbol || t.symbol.toUpperCase() === targetSymbol.toUpperCase())
+    t => activePortIds.includes(t.portfolioId) && matchesSymbol(t.symbol, targetSymbol)
   );
   const activeCosts = otherCosts.filter(c => activePortIds.includes(c.portfolioId));
 
@@ -795,7 +805,7 @@ export function calculateFinancialMetrics(
   let grossSells = 0;
 
   activeTx.forEach((tx) => {
-    if (targetSymbol && tx.symbol.toUpperCase().trim() !== targetSymbol.toUpperCase().trim()) {
+    if (targetSymbol && !matchesSymbol(tx.symbol, targetSymbol)) {
       return;
     }
 
@@ -887,6 +897,8 @@ export interface TransactionTableTotals {
   buyCount: number;
   sellCount: number;
   transferCount: number;
+  dividendCount?: number;
+  totalDividends?: number;
 }
 
 export function calculateTransactionTableTotals(
@@ -902,22 +914,37 @@ export function calculateTransactionTableTotals(
   let buyCount = 0;
   let sellCount = 0;
   let transferCount = 0;
+  let dividendCount = 0;
+  let totalDividends = 0;
 
   const assetCommissionsMap: Record<string, { qty: number; fiatValue: number }> = {};
 
   transactions.forEach((tx) => {
-    const isIncoming = tx.type === TransactionType.BUY || tx.type === TransactionType.TRANSFER_IN;
-    const sign = isIncoming ? 1 : -1;
+    if (tx.type === TransactionType.DIVIDEND) {
+      dividendCount++;
+      const divQty = tx.qty > 0 ? tx.qty : 1;
+      const divValInDisplay = convertValue(
+        tx.price * divQty,
+        tx.currency || 'EUR',
+        selectedCurrency,
+        tx.date.split('T')[0]
+      );
+      totalDividends += divValInDisplay;
+      totalAmount += divValInDisplay;
+    } else {
+      const isIncoming = tx.type === TransactionType.BUY || tx.type === TransactionType.TRANSFER_IN;
+      const sign = isIncoming ? 1 : -1;
 
-    totalQty += sign * tx.qty;
+      totalQty += sign * tx.qty;
 
-    const rowValInDisplay = convertValue(
-      tx.price * tx.qty,
-      tx.currency || 'EUR',
-      selectedCurrency,
-      tx.date.split('T')[0]
-    );
-    totalAmount += sign * rowValInDisplay;
+      const rowValInDisplay = convertValue(
+        tx.price * tx.qty,
+        tx.currency || 'EUR',
+        selectedCurrency,
+        tx.date.split('T')[0]
+      );
+      totalAmount += sign * rowValInDisplay;
+    }
 
     if (tx.commission && tx.commission > 0) {
       if (tx.commissionPaymentMode === 'ASSET') {
@@ -971,7 +998,196 @@ export function calculateTransactionTableTotals(
     totalAssetCommissionsFiat: cleanFloatNoise(totalAssetCommissionsFiat),
     buyCount,
     sellCount,
-    transferCount
+    transferCount,
+    dividendCount,
+    totalDividends: cleanFloatNoise(totalDividends)
+  };
+}
+
+export interface PortfolioDividendSummary {
+  portfolioId: string;
+  portfolioName: string;
+  accountName: string;
+  currency: string;
+  includeInDashboard: boolean;
+  totalGross: number;
+  totalNet: number;
+  totalWithholding: number;
+  paymentsCount: number;
+  latestPaymentDate: string | null;
+  symbols: { symbol: string; gross: number; count: number }[];
+}
+
+export interface DividendsOverviewData {
+  totalGross: number;
+  totalNet: number;
+  totalWithholding: number;
+  paymentsCount: number;
+  portfoliosCount: number;
+  latestPayment: {
+    id: string;
+    date: string;
+    symbol: string;
+    gross: number;
+    portfolioName: string;
+  } | null;
+  topPayingAsset: {
+    symbol: string;
+    gross: number;
+  } | null;
+  portfolioSummaries: PortfolioDividendSummary[];
+}
+
+export function calculateDividendsOverview(
+  transactions: Transaction[],
+  portfolios: Portfolio[],
+  accounts: Account[],
+  convertValue: (amount: number, from: string, to: string, date: string) => number,
+  selectedCurrency: string
+): DividendsOverviewData {
+  const dividendTxs = transactions.filter(t => t.type === TransactionType.DIVIDEND);
+  
+  // Sort descending by date
+  const sortedTxs = [...dividendTxs].sort((a, b) => new Date(b.date).getTime() - new Date(a.date).getTime());
+
+  let overallGross = 0;
+  let overallWithholding = 0;
+  const assetMap: Record<string, number> = {};
+
+  const portfolioMap: Record<string, {
+    gross: number;
+    withholding: number;
+    count: number;
+    latestDate: string | null;
+    symbols: Record<string, { gross: number; count: number }>;
+  }> = {};
+
+  // Initialize for all portfolios
+  portfolios.forEach(p => {
+    portfolioMap[p.id] = {
+      gross: 0,
+      withholding: 0,
+      count: 0,
+      latestDate: null,
+      symbols: {}
+    };
+  });
+
+  sortedTxs.forEach(tx => {
+    const qty = tx.qty > 0 ? tx.qty : 1;
+    const grossInDisplay = convertValue(
+      tx.price * qty,
+      tx.currency || 'EUR',
+      selectedCurrency,
+      tx.date.split('T')[0]
+    );
+
+    let withholdingInDisplay = 0;
+    if (tx.commission && tx.commission > 0) {
+      withholdingInDisplay = convertValue(
+        tx.commission,
+        tx.commissionCurrency || tx.currency || 'EUR',
+        selectedCurrency,
+        tx.date.split('T')[0]
+      );
+    }
+
+    overallGross += grossInDisplay;
+    overallWithholding += withholdingInDisplay;
+
+    const sym = (tx.symbol || 'OTHER').toUpperCase().trim();
+    assetMap[sym] = (assetMap[sym] || 0) + grossInDisplay;
+
+    if (!portfolioMap[tx.portfolioId]) {
+      portfolioMap[tx.portfolioId] = {
+        gross: 0,
+        withholding: 0,
+        count: 0,
+        latestDate: null,
+        symbols: {}
+      };
+    }
+
+    const pEntry = portfolioMap[tx.portfolioId];
+    pEntry.gross += grossInDisplay;
+    pEntry.withholding += withholdingInDisplay;
+    pEntry.count += 1;
+    if (!pEntry.latestDate || new Date(tx.date).getTime() > new Date(pEntry.latestDate).getTime()) {
+      pEntry.latestDate = tx.date;
+    }
+
+    if (!pEntry.symbols[sym]) {
+      pEntry.symbols[sym] = { gross: 0, count: 0 };
+    }
+    pEntry.symbols[sym].gross += grossInDisplay;
+    pEntry.symbols[sym].count += 1;
+  });
+
+  // Top paying asset
+  let topPayingAsset: { symbol: string; gross: number } | null = null;
+  for (const [sym, gross] of Object.entries(assetMap)) {
+    if (!topPayingAsset || gross > topPayingAsset.gross) {
+      topPayingAsset = { symbol: sym, gross: cleanFloatNoise(gross) };
+    }
+  }
+
+  // Latest payment
+  let latestPayment: DividendsOverviewData['latestPayment'] = null;
+  if (sortedTxs.length > 0) {
+    const firstTx = sortedTxs[0];
+    const targetPort = portfolios.find(p => p.id === firstTx.portfolioId);
+    const qty = firstTx.qty > 0 ? firstTx.qty : 1;
+    const grossVal = convertValue(
+      firstTx.price * qty,
+      firstTx.currency || 'EUR',
+      selectedCurrency,
+      firstTx.date.split('T')[0]
+    );
+    latestPayment = {
+      id: firstTx.id,
+      date: firstTx.date,
+      symbol: firstTx.symbol,
+      gross: cleanFloatNoise(grossVal),
+      portfolioName: targetPort ? targetPort.name : 'N/A'
+    };
+  }
+
+  // Build summaries array
+  const portfolioSummaries: PortfolioDividendSummary[] = portfolios.map(p => {
+    const acc = accounts.find(a => a.id === p.accountId);
+    const data = portfolioMap[p.id] || { gross: 0, withholding: 0, count: 0, latestDate: null, symbols: {} };
+    const symbolsList = Object.entries(data.symbols).map(([sym, item]) => ({
+      symbol: sym,
+      gross: cleanFloatNoise(item.gross),
+      count: item.count
+    })).sort((a, b) => b.gross - a.gross);
+
+    return {
+      portfolioId: p.id,
+      portfolioName: p.name,
+      accountName: acc ? acc.name : 'Unknown',
+      currency: acc ? acc.currency : 'EUR',
+      includeInDashboard: p.includeInDashboard ?? true,
+      totalGross: cleanFloatNoise(data.gross),
+      totalNet: cleanFloatNoise(data.gross - data.withholding),
+      totalWithholding: cleanFloatNoise(data.withholding),
+      paymentsCount: data.count,
+      latestPaymentDate: data.latestDate,
+      symbols: symbolsList
+    };
+  }).sort((a, b) => b.totalGross - a.totalGross);
+
+  const portfoliosWithDividends = portfolioSummaries.filter(p => p.paymentsCount > 0).length;
+
+  return {
+    totalGross: cleanFloatNoise(overallGross),
+    totalNet: cleanFloatNoise(overallGross - overallWithholding),
+    totalWithholding: cleanFloatNoise(overallWithholding),
+    paymentsCount: dividendTxs.length,
+    portfoliosCount: portfoliosWithDividends,
+    latestPayment,
+    topPayingAsset,
+    portfolioSummaries
   };
 }
 
@@ -1286,7 +1502,7 @@ export function calculatePortfolioPerformance(
   convertValue: (amount: number, from: string, to: string, date: string) => number,
   startDate?: string,
   endDate?: string,
-  targetSymbol?: string | null
+  targetSymbol?: string | string[] | null
 ): PortfolioPerformanceResult {
   const emptyResult: PortfolioPerformanceResult = {
     twrrPercentage: 0,
@@ -1350,7 +1566,7 @@ export function calculatePortfolioPerformance(
     const txDateStr = tx.date.split('T')[0];
     if (txDateStr < firstDate || txDateStr > lastDate) return false;
     if (!activePortIds.includes(tx.portfolioId)) return false;
-    if (targetSymbol && tx.symbol.toUpperCase().trim() !== targetSymbol.toUpperCase().trim()) return false;
+    if (targetSymbol && !matchesSymbol(tx.symbol, targetSymbol)) return false;
     return true;
   });
 
@@ -1598,3 +1814,183 @@ export function calculatePortfolioPerformance(
     totalDays
   };
 }
+
+export interface ConstituentPositionDetail {
+  symbol: string;
+  sharesOwned: number;
+  pmc: number;
+  todayPriceInDisplay: number;
+  totalNominalValue: number;
+  yesterdayNominalValue: number;
+  openLotsCostBasis: number;
+  totalCapitalInvested: number;
+  gainAbsolute: number;
+  gainPercentage: number;
+  weightInGroup: number;
+  weightInPortfolio: number;
+  dailyChangeAbs: number;
+  dailyChangePct: number;
+  activeLots: PortfolioLot[];
+}
+
+export interface AggregatedTickerPosition extends TickerMetric {
+  symbol: string;
+  isGroup?: boolean;
+  groupId?: string;
+  groupName?: string;
+  notes?: string;
+  constituentSymbols?: string[];
+  constituents?: ConstituentPositionDetail[];
+  weight: number;
+  dailyChangeAbs: number;
+  dailyChangePct: number;
+}
+
+export function buildAggregatedPositions(
+  tickerMetrics: { [symbol: string]: TickerMetric },
+  instrumentGroups: InstrumentGroup[] = [],
+  totalPortfolioNominalValue: number = 0,
+  aggregateEnabled: boolean = true
+): AggregatedTickerPosition[] {
+  // If aggregated view is disabled or no groups defined, return regular per-ticker positions
+  if (!aggregateEnabled || !instrumentGroups || instrumentGroups.length === 0) {
+    return Object.keys(tickerMetrics)
+      .map(symbol => {
+        const m = tickerMetrics[symbol];
+        const weight = totalPortfolioNominalValue > 0 ? (m.totalNominalValue / totalPortfolioNominalValue) * 100 : 0;
+        const dailyChangeAbs = m.totalNominalValue - m.yesterdayNominalValue;
+        const dailyChangePct = m.yesterdayNominalValue > 0 ? (dailyChangeAbs / m.yesterdayNominalValue) * 100 : 0;
+
+        return {
+          ...m,
+          symbol,
+          weight,
+          dailyChangeAbs,
+          dailyChangePct,
+          isGroup: false
+        };
+      })
+      .filter(pos => pos.sharesOwned > 1e-12);
+  }
+
+  const handledSymbols = new Set<string>();
+  const aggregatedPositions: AggregatedTickerPosition[] = [];
+
+  // 1. Process defined groups
+  instrumentGroups.forEach((group) => {
+    const groupSymbols = (group.tickerSymbols || []).map(s => s.toUpperCase().trim());
+    const activeConstituents = groupSymbols
+      .map(sym => ({ symbol: sym, metric: tickerMetrics[sym] }))
+      .filter((item): item is { symbol: string; metric: TickerMetric } => !!item.metric && item.metric.sharesOwned > 1e-12);
+
+    if (activeConstituents.length === 0) return;
+
+    groupSymbols.forEach(s => handledSymbols.add(s));
+
+    const sharesOwned = cleanFloatNoise(activeConstituents.reduce((sum, c) => sum + c.metric.sharesOwned, 0));
+    const totalNominalValue = cleanFloatNoise(activeConstituents.reduce((sum, c) => sum + c.metric.totalNominalValue, 0));
+    const yesterdayNominalValue = cleanFloatNoise(activeConstituents.reduce((sum, c) => sum + c.metric.yesterdayNominalValue, 0));
+    const openLotsCostBasis = cleanFloatNoise(activeConstituents.reduce((sum, c) => sum + (c.metric.openLotsCostBasis ?? c.metric.totalCapitalInvested), 0));
+    const totalCapitalInvested = cleanFloatNoise(activeConstituents.reduce((sum, c) => sum + c.metric.totalCapitalInvested, 0));
+    const netContributedCapital = cleanFloatNoise(activeConstituents.reduce((sum, c) => sum + c.metric.netContributedCapital, 0));
+    const grossBuys = cleanFloatNoise(activeConstituents.reduce((sum, c) => sum + (c.metric.grossBuys || 0), 0));
+    const grossSells = cleanFloatNoise(activeConstituents.reduce((sum, c) => sum + (c.metric.grossSells || 0), 0));
+    const realizedGainLoss = cleanFloatNoise(activeConstituents.reduce((sum, c) => sum + (c.metric.realizedGainLoss || 0), 0));
+    const totalCommissionsPaid = cleanFloatNoise(activeConstituents.reduce((sum, c) => sum + c.metric.totalCommissionsPaid, 0));
+    const avgCommissionShare = sharesOwned > 0 ? cleanFloatNoise(totalCommissionsPaid / sharesOwned) : 0;
+
+    const pmc = sharesOwned > 0 ? cleanFloatNoise(openLotsCostBasis / sharesOwned) : 0;
+    const todayPriceInDisplay = sharesOwned > 0 ? cleanFloatNoise(totalNominalValue / sharesOwned) : 0;
+    const yesterdayPriceInDisplay = sharesOwned > 0 ? cleanFloatNoise(yesterdayNominalValue / sharesOwned) : 0;
+
+    const gainAbsolute = cleanFloatNoise(totalNominalValue - openLotsCostBasis);
+    const gainPercentage = openLotsCostBasis > 0 ? (gainAbsolute / openLotsCostBasis) * 100 : 0;
+
+    const dailyChangeAbs = cleanFloatNoise(totalNominalValue - yesterdayNominalValue);
+    const dailyChangePct = yesterdayNominalValue > 0 ? (dailyChangeAbs / yesterdayNominalValue) * 100 : 0;
+    const weight = totalPortfolioNominalValue > 0 ? (totalNominalValue / totalPortfolioNominalValue) * 100 : 0;
+
+    const allLots = activeConstituents
+      .flatMap(c => c.metric.activeLots || [])
+      .sort((a, b) => new Date(b.originalDate).getTime() - new Date(a.originalDate).getTime());
+
+    const constituents: ConstituentPositionDetail[] = activeConstituents.map(c => {
+      const m = c.metric;
+      const cDailyChangeAbs = m.totalNominalValue - m.yesterdayNominalValue;
+      const cDailyChangePct = m.yesterdayNominalValue > 0 ? (cDailyChangeAbs / m.yesterdayNominalValue) * 100 : 0;
+      const weightInGroup = totalNominalValue > 0 ? (m.totalNominalValue / totalNominalValue) * 100 : 0;
+      const weightInPortfolio = totalPortfolioNominalValue > 0 ? (m.totalNominalValue / totalPortfolioNominalValue) * 100 : 0;
+
+      return {
+        symbol: c.symbol,
+        sharesOwned: m.sharesOwned,
+        pmc: m.pmc,
+        todayPriceInDisplay: m.todayPriceInDisplay,
+        totalNominalValue: m.totalNominalValue,
+        yesterdayNominalValue: m.yesterdayNominalValue,
+        openLotsCostBasis: m.openLotsCostBasis,
+        totalCapitalInvested: m.totalCapitalInvested,
+        gainAbsolute: m.gainAbsolute,
+        gainPercentage: m.gainPercentage,
+        weightInGroup,
+        weightInPortfolio,
+        dailyChangeAbs: cDailyChangeAbs,
+        dailyChangePct: cDailyChangePct,
+        activeLots: m.activeLots || []
+      };
+    });
+
+    aggregatedPositions.push({
+      symbol: group.name,
+      sharesOwned,
+      openLotsCostBasis,
+      totalCapitalInvested,
+      netContributedCapital,
+      grossBuys,
+      grossSells,
+      pmc,
+      totalCommissionsPaid,
+      avgCommissionShare,
+      todayPriceInDisplay,
+      yesterdayPriceInDisplay,
+      totalNominalValue,
+      yesterdayNominalValue,
+      gainAbsolute,
+      gainPercentage,
+      realizedGainLoss,
+      activeLots: allLots,
+      isGroup: true,
+      groupId: group.id,
+      groupName: group.name,
+      notes: group.notes,
+      constituentSymbols: groupSymbols,
+      constituents,
+      weight,
+      dailyChangeAbs,
+      dailyChangePct
+    });
+  });
+
+  // 2. Add remaining non-grouped positions
+  Object.keys(tickerMetrics).forEach(symbol => {
+    if (handledSymbols.has(symbol.toUpperCase().trim())) return;
+    const m = tickerMetrics[symbol];
+    if (m.sharesOwned <= 1e-12) return;
+
+    const weight = totalPortfolioNominalValue > 0 ? (m.totalNominalValue / totalPortfolioNominalValue) * 100 : 0;
+    const dailyChangeAbs = m.totalNominalValue - m.yesterdayNominalValue;
+    const dailyChangePct = m.yesterdayNominalValue > 0 ? (dailyChangeAbs / m.yesterdayNominalValue) * 100 : 0;
+
+    aggregatedPositions.push({
+      ...m,
+      symbol,
+      weight,
+      dailyChangeAbs,
+      dailyChangePct,
+      isGroup: false
+    });
+  });
+
+  return aggregatedPositions;
+}
+

@@ -12,7 +12,8 @@ export enum TransactionType {
   BUY = 'BUY',
   SELL = 'SELL',
   TRANSFER_IN = 'TRANSFER_IN',
-  TRANSFER_OUT = 'TRANSFER_OUT'
+  TRANSFER_OUT = 'TRANSFER_OUT',
+  DIVIDEND = 'DIVIDEND'
 }
 
 export interface Account {
@@ -97,6 +98,13 @@ export interface InflationSetting {
   values: InflationIndex[];
 }
 
+export interface InstrumentGroup {
+  id: string;
+  name: string;
+  tickerSymbols: string[];
+  notes?: string;
+}
+
 export interface SystemSettings {
   theme: 'light' | 'dark' | 'system';
   defaultCurrency: Currency | string;
@@ -109,6 +117,7 @@ export interface SystemSettings {
   includeCommissions?: boolean;
   targetWeights?: { [symbol: string]: number };
   columnWidths?: { [columnId: string]: number };
+  aggregateInstrumentsView?: boolean;
 }
 
 export interface DBState {
@@ -118,6 +127,7 @@ export interface DBState {
   transactions: Transaction[];
   transfers?: Transfer[];
   otherCosts?: OtherCost[];
+  instrumentGroups?: InstrumentGroup[];
   priceCache: {
     // Ticker -> Date (YYYY-MM-DD) -> Price
     [ticker: string]: { [date: string]: number };
@@ -636,6 +646,56 @@ export interface LanguagePhrases {
   pmcFullTitle: string;
   createFirstTransfer: string;
   transfersCountLabel: string;
+
+  // Dividend keys
+  dividendsTab: string;
+  dividendsTitle: string;
+  dividendsDesc: string;
+  dividendLabel: string;
+  totalDividendsReceived: string;
+  dividendsPerPortfolio: string;
+  historicalPaymentDates: string;
+  paymentDate: string;
+  grossDividend: string;
+  withholdingTax: string;
+  netDividend: string;
+  registerDividendBtn: string;
+  noDividendsRecorded: string;
+  noDividendsMatchingCriteria: string;
+  dividendPaymentsCount: string;
+  latestPaymentDate: string;
+  allPortfoliosOption: string;
+  dividendPerShareLabel: string;
+  topDividendPayerLabel: string;
+  viewDividendsTooltip: string;
+
+  // Instrument Groups & Aggregated Mode
+  aggregatedInstrumentsMode?: string;
+  aggregatedModeShort?: string;
+  standardModeShort?: string;
+  manageGroupsBtn?: string;
+  manageGroups?: string;
+  newGroupBtn?: string;
+  editGroupTitle?: string;
+  newGroupTitle?: string;
+  groupNameLabel?: string;
+  groupTickersLabel?: string;
+  groupNotesLabel?: string;
+  groupOnlyLabel?: string;
+  groupLabel?: string;
+  selectGroupLabel?: string;
+  noGroupsConfigured?: string;
+  instrumentGroupsManagerTitle?: string;
+  instrumentGroupsManagerDesc?: string;
+  aggregatedBadge?: string;
+  aggregatedInstrumentBadge?: string;
+  constituentTickersTitle?: string;
+  groupOpenLotsTitle?: string;
+  autoDetectGroupsBtn?: string;
+  autoDetectGroupsDesc?: string;
+  confirmDeleteGroup?: string;
+  groupDetailsLabel?: string;
+  weightInGroupLabel?: string;
 }
 
 export interface TranslationDictionary {

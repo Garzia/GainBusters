@@ -4,8 +4,8 @@
  */
 
 import React, { useState, useMemo } from 'react';
-import { LanguagePhrases, Portfolio } from '../types.ts';
-import { TickerMetric, PortfolioLot } from '../utils/finance.ts';
+import { LanguagePhrases, Portfolio, InstrumentGroup } from '../types.ts';
+import { TickerMetric, PortfolioLot, buildAggregatedPositions, AggregatedTickerPosition } from '../utils/finance.ts';
 import { formatDateString } from '../utils.ts';
 import { QuantityDisplay } from './QuantityDisplay';
 import { formatFullQuantity } from '../utils/formatters';
@@ -20,7 +20,9 @@ import {
   TrendingUp,
   TrendingDown,
   Sparkles,
-  PieChart
+  PieChart,
+  Tag,
+  Plus
 } from 'lucide-react';
 
 interface PositionsTableProps {
@@ -33,6 +35,11 @@ interface PositionsTableProps {
   portfolios: Portfolio[];
   onSelectTicker?: (symbol: string) => void;
   formatCurrency: (val: number, curr?: string) => string;
+  instrumentGroups?: InstrumentGroup[];
+  isAggregatedView?: boolean;
+  onToggleAggregatedView?: () => void;
+  onOpenGroupsManager?: () => void;
+  onSelectGroup?: (groupId: string) => void;
 }
 
 type SortField = 'symbol' | 'sharesOwned' | 'pmc' | 'todayPriceInDisplay' | 'totalNominalValue' | 'gainAbsolute' | 'gainPercentage' | 'weight';
@@ -47,7 +54,12 @@ export const PositionsTable: React.FC<PositionsTableProps> = ({
   convertValue,
   portfolios,
   onSelectTicker,
-  formatCurrency
+  formatCurrency,
+  instrumentGroups = [],
+  isAggregatedView = false,
+  onToggleAggregatedView,
+  onOpenGroupsManager,
+  onSelectGroup
 }) => {
   const [searchTerm, setSearchTerm] = useState('');
   const [sortField, setSortField] = useState<SortField>('totalNominalValue');
@@ -61,31 +73,26 @@ export const PositionsTable: React.FC<PositionsTableProps> = ({
     return p ? p.name : pId;
   };
 
-  // Convert raw metrics into array of positions with sharesOwned > 0
-  const openPositions = useMemo(() => {
-    return Object.keys(tickerMetrics)
-      .map(symbol => {
-        const m = tickerMetrics[symbol];
-        const weight = totalPortfolioNominalValue > 0 ? (m.totalNominalValue / totalPortfolioNominalValue) * 100 : 0;
-        const dailyChangeAbs = m.totalNominalValue - m.yesterdayNominalValue;
-        const dailyChangePct = m.yesterdayNominalValue > 0 ? (dailyChangeAbs / m.yesterdayNominalValue) * 100 : 0;
+  // Convert raw metrics into array of positions with sharesOwned > 0 (aggregated or per-ticker)
+  const openPositions: AggregatedTickerPosition[] = useMemo(() => {
+    return buildAggregatedPositions(
+      tickerMetrics,
+      instrumentGroups,
+      totalPortfolioNominalValue,
+      isAggregatedView
+    );
+  }, [tickerMetrics, instrumentGroups, totalPortfolioNominalValue, isAggregatedView]);
 
-        return {
-          symbol,
-          ...m,
-          weight,
-          dailyChangeAbs,
-          dailyChangePct
-        };
-      })
-      .filter(pos => pos.sharesOwned > 1e-12);
-  }, [tickerMetrics, totalPortfolioNominalValue]);
-
-  // Filter positions by search term
+  // Filter positions by search term (matching symbol, group name, or constituent tickers)
   const filteredPositions = useMemo(() => {
     if (!searchTerm.trim()) return openPositions;
     const term = searchTerm.trim().toLowerCase();
-    return openPositions.filter(pos => pos.symbol.toLowerCase().includes(term));
+    return openPositions.filter(pos => {
+      if (pos.symbol.toLowerCase().includes(term)) return true;
+      if (pos.groupName && pos.groupName.toLowerCase().includes(term)) return true;
+      if (pos.constituentSymbols && pos.constituentSymbols.some(s => s.toLowerCase().includes(term))) return true;
+      return false;
+    });
   }, [openPositions, searchTerm]);
 
   // Sort positions
@@ -177,9 +184,44 @@ export const PositionsTable: React.FC<PositionsTableProps> = ({
           </p>
         </div>
 
-        {/* Search & Tooltip Toggle */}
-        <div className="flex flex-wrap items-center gap-3">
-          <div className="relative min-w-[220px]">
+        {/* Search, Mode Toggle & Controls */}
+        <div className="flex flex-wrap items-center gap-2.5">
+          {/* Aggregated Mode Toggle Button */}
+          {onToggleAggregatedView && (
+            <button
+              type="button"
+              onClick={onToggleAggregatedView}
+              className={`px-3 py-1.5 rounded-xl border text-xs font-semibold flex items-center gap-1.5 transition-all cursor-pointer select-none ${
+                isAggregatedView
+                  ? 'bg-emerald-500/20 text-emerald-300 border-emerald-500/40 shadow-sm'
+                  : 'bg-slate-950/80 text-slate-400 border-slate-800 hover:text-white hover:bg-slate-900'
+              }`}
+              title={isAggregatedView ? 'Visualizzazione aggregata attiva: clicca per visualizzare i singoli ticker' : 'Visualizza i ticker raggruppati per strumento aggregato'}
+            >
+              <Layers className={`w-3.5 h-3.5 ${isAggregatedView ? 'text-emerald-400' : 'text-slate-400'}`} />
+              <span>{isAggregatedView ? (t.aggregatedModeShort || 'Strumenti Aggregati') : (t.standardModeShort || 'Singoli Ticker')}</span>
+            </button>
+          )}
+
+          {/* Manage Groups Button */}
+          {onOpenGroupsManager && (
+            <button
+              type="button"
+              onClick={onOpenGroupsManager}
+              className="px-2.5 py-1.5 rounded-xl bg-slate-950/80 border border-slate-800 text-slate-300 hover:text-white hover:bg-slate-900 transition-all cursor-pointer flex items-center gap-1.5 text-xs font-medium"
+              title="Crea, modifica o elimina raggruppamenti di ticker multi-borsa"
+            >
+              <Plus className="w-3.5 h-3.5 text-emerald-400" />
+              <span className="hidden sm:inline">{t.manageGroupsBtn || 'Gestisci Gruppi'}</span>
+              {instrumentGroups && instrumentGroups.length > 0 && (
+                <span className="px-1.5 py-0.2 text-[10px] rounded-full bg-slate-800 text-emerald-400 font-mono font-bold border border-slate-700">
+                  {instrumentGroups.length}
+                </span>
+              )}
+            </button>
+          )}
+
+          <div className="relative min-w-[200px]">
             <Search className="w-4 h-4 absolute left-3 top-1/2 -translate-y-1/2 text-slate-500" />
             <input
               type="text"
@@ -318,19 +360,45 @@ export const PositionsTable: React.FC<PositionsTableProps> = ({
                         <div className="flex items-center gap-2.5">
                           <button
                             type="button"
-                            onClick={() => onSelectTicker && onSelectTicker(pos.symbol)}
-                            className={`w-8 h-8 rounded-xl bg-gradient-to-br ${badgeStyle} border font-black text-xs flex items-center justify-center shrink-0 cursor-pointer shadow-sm group-hover:scale-105 transition-transform`}
-                            title={`Filtra grafico per ${pos.symbol}`}
+                            onClick={() => {
+                              if (pos.isGroup && pos.groupId && onSelectGroup) {
+                                onSelectGroup(pos.groupId);
+                              } else if (onSelectTicker) {
+                                onSelectTicker(pos.symbol);
+                              }
+                            }}
+                            className={`w-8 h-8 rounded-xl ${
+                              pos.isGroup
+                                ? 'bg-emerald-500/20 text-emerald-400 border border-emerald-500/30'
+                                : `bg-gradient-to-br ${badgeStyle} border`
+                            } font-black text-xs flex items-center justify-center shrink-0 cursor-pointer shadow-sm group-hover:scale-105 transition-transform`}
+                            title={pos.isGroup ? `Filtra per gruppo ${pos.symbol}` : `Filtra grafico per ${pos.symbol}`}
                           >
-                            {pos.symbol.substring(0, 3)}
+                            {pos.isGroup ? <Layers className="w-4 h-4" /> : pos.symbol.substring(0, 3)}
                           </button>
                           <div>
-                            <div className="font-bold text-white group-hover:text-emerald-400 transition-colors flex items-center gap-1.5">
+                            <div className="font-bold text-white group-hover:text-emerald-400 transition-colors flex items-center gap-1.5 flex-wrap">
                               <span>{pos.symbol}</span>
+                              {pos.isGroup && (
+                                <span className="text-[9px] bg-emerald-500/15 text-emerald-300 border border-emerald-500/30 px-1.5 py-0.2 rounded font-semibold uppercase tracking-wider">
+                                  {t.aggregatedBadge || 'Aggregato'}
+                                </span>
+                              )}
                             </div>
-                            <div className="text-[10px] text-slate-500 flex items-center gap-1">
-                              <span>{pos.activeLots.length} {t.openLotsTitle}</span>
-                            </div>
+                            {pos.isGroup ? (
+                              <div className="text-[10px] text-slate-400 flex items-center gap-1 flex-wrap mt-0.5">
+                                <span className="text-slate-500">{pos.constituents?.length || pos.constituentSymbols?.length} Ticker:</span>
+                                {pos.constituentSymbols?.map(sym => (
+                                  <span key={sym} className="px-1.5 py-0.2 rounded bg-slate-900 border border-slate-800 text-sky-400 font-mono text-[9px] font-semibold">
+                                    {sym}
+                                  </span>
+                                ))}
+                              </div>
+                            ) : (
+                              <div className="text-[10px] text-slate-500 flex items-center gap-1">
+                                <span>{pos.activeLots.length} {t.openLotsTitle}</span>
+                              </div>
+                            )}
                           </div>
                         </div>
                       </td>
@@ -398,152 +466,248 @@ export const PositionsTable: React.FC<PositionsTableProps> = ({
                     {isExpanded && (
                       <tr className="bg-slate-950/60 border-y border-slate-800/80 animate-fade-in">
                         <td colSpan={8} className="p-4">
-                          <div className="space-y-3 bg-slate-900/60 border border-slate-800/90 rounded-xl p-4">
-                            <div className="flex items-center justify-between border-b border-slate-800 pb-2">
-                              <h4 className="font-black text-xs text-emerald-400 uppercase tracking-wider flex items-center gap-1.5">
-                                <Layers className="w-3.5 h-3.5" />
-                                {t.openLotsTitle} - {pos.symbol}
-                              </h4>
-                              <span className="text-[11px] text-slate-400 font-mono">
-                                PMC Totale: <strong className="text-amber-400">{formatCurrency(pos.pmc, selectedCurrency)}</strong>
-                              </span>
-                            </div>
+                          <div className="space-y-4">
+                            {/* If it's an Aggregated Group: show Constituent Tickers Breakdown */}
+                            {pos.isGroup && pos.constituents && pos.constituents.length > 0 && (
+                              <div className="bg-slate-900/80 border border-slate-800/90 rounded-xl p-4 space-y-3">
+                                <div className="flex items-center justify-between border-b border-slate-800 pb-2">
+                                  <h4 className="font-black text-xs text-sky-400 uppercase tracking-wider flex items-center gap-1.5">
+                                    <PieChart className="w-3.5 h-3.5" />
+                                    {t.groupConstituentsTitle || 'Dettaglio Ticker nel Gruppo'} ({pos.constituents.length})
+                                  </h4>
+                                  <span className="text-[11px] text-slate-400 font-mono">
+                                    {t.aggregateTotalWeight || 'Peso Totale nel Gruppo'}: <strong className="text-white">100%</strong>
+                                  </span>
+                                </div>
 
-                            <div className="overflow-x-auto">
-                              <table className="w-full text-left text-[11px] font-mono">
-                                <thead>
-                                  <tr className="text-slate-500 border-b border-slate-800/60 pb-1">
-                                    <th className="py-1.5 px-2">{t.lotOriginalDate}</th>
-                                    <th className="py-1.5 px-2">{t.lotPortfolio}</th>
-                                    <th className="py-1.5 px-2 text-right">{t.lotRemainingQty}</th>
-                                    <th className="py-1.5 px-2 text-right">{t.lotPurchasePrice}</th>
-                                    <th className="py-1.5 px-2 text-right">{t.lotTotalInvested}</th>
-                                    <th className="py-1.5 px-2 text-right">{t.lotCurrentValue}</th>
-                                    <th className="py-1.5 px-2 text-right">{t.lotGainLoss}</th>
-                                  </tr>
-                                </thead>
-                                <tbody className="divide-y divide-slate-800/40">
-                                  {pos.activeLots.map((lot, idx) => {
-                                    const lotBuyInDisplay = convertValue(
-                                      lot.buyPrice,
-                                      lot.currency || 'EUR',
-                                      selectedCurrency,
-                                      lot.originalDate.split('T')[0]
-                                    );
-                                    const lotInvested = convertValue(
-                                      lot.remainingQty * lot.buyPrice,
-                                      lot.currency || 'EUR',
-                                      selectedCurrency,
-                                      lot.originalDate.split('T')[0]
-                                    );
-                                    const lotCurrentVal = lot.remainingQty * pos.todayPriceInDisplay;
-                                    const lotGainAbs = lotCurrentVal - lotInvested;
-                                    const lotGainPct = lotInvested > 0 ? (lotGainAbs / lotInvested) * 100 : 0;
-                                    const isTransfer = !!(lot.transferId || lot.parentTransactionId);
-                                    const isPartial = lot.qty > 0 && Math.abs(lot.qty - lot.remainingQty) > 1e-12;
-                                    const originalInvested = convertValue(
-                                      lot.qty * lot.buyPrice,
-                                      lot.currency || 'EUR',
-                                      selectedCurrency,
-                                      lot.originalDate.split('T')[0]
-                                    );
-
-                                    return (
-                                      <tr key={lot.id + '-' + idx} className="hover:bg-slate-800/20">
-                                        <td className="py-2 px-2 text-slate-300">
-                                          <div className="font-bold text-slate-200">
-                                            {formatDateString(lot.originalDate, lang)}
-                                          </div>
-                                          {isPartial && (
-                                            <span className="text-[10px] text-amber-400 block font-normal">
-                                              Residuo lotto BUY del {formatDateString(lot.originalDate, lang)}
-                                            </span>
-                                          )}
-                                        </td>
-                                        <td className="py-2 px-2 text-slate-300 flex items-center gap-1.5 flex-wrap">
-                                          <span>{getPortfolioName(lot.portfolioId)}</span>
-                                          {isTransfer && (
-                                            <span className="text-[9px] bg-indigo-500/20 text-indigo-300 border border-indigo-500/30 px-1.5 py-0.2 rounded font-bold">
-                                              TRASFERITO
-                                            </span>
-                                          )}
-                                          {isPartial ? (
-                                            <span className="text-[9px] bg-amber-500/20 text-amber-300 border border-amber-500/30 px-1.5 py-0.2 rounded font-bold" title="Lotto parzialmente scaricato da successive vendite">
-                                              LOTTO SCARICATO
-                                            </span>
-                                          ) : (
-                                            <span className="text-[9px] bg-emerald-500/20 text-emerald-300 border border-emerald-500/30 px-1.5 py-0.2 rounded font-bold">
-                                              INTERO
-                                            </span>
-                                          )}
-                                        </td>
-                                        <td className="py-2 px-2 text-right text-slate-200">
-                                          <div className="font-bold">
-                                            <QuantityDisplay value={lot.remainingQty} />
-                                          </div>
-                                          {isPartial && (
-                                            <span className="text-[10px] text-slate-400 font-mono block font-normal mt-0.5" title="Quantità acquistata nella transazione BUY originale (immutabile)">
-                                              Quantità acquistata nel BUY originale: {formatFullQuantity(lot.qty)}
-                                            </span>
-                                          )}
-                                        </td>
-                                        <td className="py-2 px-2 text-right text-amber-400">
-                                          <div className="font-bold">
-                                            {formatCurrency(lotBuyInDisplay, selectedCurrency)}
-                                          </div>
-                                          {lot.currency && lot.currency !== selectedCurrency && (
-                                            <span className="text-[9px] text-slate-500 block">
-                                              ({lot.buyPrice.toFixed(2)} {lot.currency})
-                                            </span>
-                                          )}
-                                        </td>
-                                        <td className="py-2 px-2 text-right text-slate-300">
-                                          <div className="font-bold text-slate-200">
-                                            {formatCurrency(lotInvested, selectedCurrency)}
-                                          </div>
-                                          {isPartial && (
-                                            <span className="text-[10px] text-slate-400 font-mono block font-normal mt-0.5" title="Costo della transazione BUY originale (immutabile)">
-                                              Costo nel BUY originale: {formatCurrency(originalInvested, selectedCurrency)}
-                                            </span>
-                                          )}
-                                        </td>
-                                        <td className="py-2 px-2 text-right text-white font-bold">
-                                          {formatCurrency(lotCurrentVal, selectedCurrency)}
-                                        </td>
-                                        <td className="py-2 px-2 text-right">
-                                          <span className={`font-bold ${lotGainAbs >= 0 ? 'text-emerald-400' : 'text-rose-500'}`}>
-                                            {lotGainAbs >= 0 ? '+' : ''}{formatCurrency(lotGainAbs, selectedCurrency)} ({lotGainPct >= 0 ? '+' : ''}{lotGainPct.toFixed(1)}%)
-                                          </span>
-                                        </td>
+                                <div className="overflow-x-auto">
+                                  <table className="w-full text-left text-[11px] font-mono">
+                                    <thead>
+                                      <tr className="text-slate-500 border-b border-slate-800/60 pb-1">
+                                        <th className="py-1.5 px-2">{t.colTicker}</th>
+                                        <th className="py-1.5 px-2 text-right">{t.colQuantity}</th>
+                                        <th className="py-1.5 px-2 text-right">{t.colPmc}</th>
+                                        <th className="py-1.5 px-2 text-right">{t.colCurrentPrice}</th>
+                                        <th className="py-1.5 px-2 text-right">{t.colMarketValue}</th>
+                                        <th className="py-1.5 px-2 text-right">{t.colProfitLossAbs}</th>
+                                        <th className="py-1.5 px-2 text-right">{t.weightInGroup || 'Peso nel Gruppo'}</th>
+                                        <th className="py-1.5 px-2 text-right">{t.colPortfolioWeight}</th>
                                       </tr>
-                                    );
-                                  })}
-                                </tbody>
-                                <tfoot>
-                                  <tr className="border-t border-slate-800 text-slate-300 text-xs font-semibold bg-slate-900/40">
-                                    <td colSpan={2} className="py-2 px-2 font-bold text-slate-400">
-                                      Totale Carico Storico Lotti Aperti ({pos.activeLots.length})
-                                    </td>
-                                    <td className="py-2 px-2 text-right font-bold text-slate-200">
-                                      <QuantityDisplay value={pos.sharesOwned} />
-                                    </td>
-                                    <td className="py-2 px-2 text-right text-amber-400 font-bold">
-                                      PMC {formatCurrency(pos.pmc, selectedCurrency)}
-                                    </td>
-                                    <td className="py-2 px-2 text-right font-bold text-slate-200">
-                                      {formatCurrency(pos.openLotsCostBasis ?? pos.totalCapitalInvested, selectedCurrency)}
-                                    </td>
-                                    <td className="py-2 px-2 text-right font-bold text-white">
-                                      {formatCurrency(pos.totalNominalValue, selectedCurrency)}
-                                    </td>
-                                    <td className="py-2 px-2 text-right">
-                                      <span className={`font-bold ${pos.gainAbsolute >= 0 ? 'text-emerald-400' : 'text-rose-500'}`}>
-                                        {pos.gainAbsolute >= 0 ? '+' : ''}{formatCurrency(pos.gainAbsolute, selectedCurrency)} ({pos.gainPercentage >= 0 ? '+' : ''}{pos.gainPercentage.toFixed(1)}%)
-                                      </span>
-                                    </td>
-                                  </tr>
-                                </tfoot>
-                              </table>
+                                    </thead>
+                                    <tbody className="divide-y divide-slate-800/40">
+                                      {pos.constituents.map(c => (
+                                        <tr key={c.symbol} className="hover:bg-slate-800/30 transition-colors">
+                                          <td className="py-2 px-2">
+                                            <button
+                                              type="button"
+                                              onClick={() => onSelectTicker && onSelectTicker(c.symbol)}
+                                              className="font-bold text-sky-400 hover:text-sky-300 hover:underline flex items-center gap-1 cursor-pointer"
+                                              title={`Isola ${c.symbol} nel grafico`}
+                                            >
+                                              <span>{c.symbol}</span>
+                                            </button>
+                                          </td>
+                                          <td className="py-2 px-2 text-right text-slate-200 font-bold">
+                                            <QuantityDisplay value={c.sharesOwned} />
+                                          </td>
+                                          <td className="py-2 px-2 text-right text-amber-400 font-bold">
+                                            {formatCurrency(c.pmc, selectedCurrency)}
+                                          </td>
+                                          <td className="py-2 px-2 text-right text-slate-300">
+                                            <div>{formatCurrency(c.todayPriceInDisplay, selectedCurrency)}</div>
+                                            <div className={`text-[9px] font-bold ${c.dailyChangePct >= 0 ? 'text-emerald-400' : 'text-rose-400'}`}>
+                                              {c.dailyChangePct >= 0 ? '▲ +' : '▼ '}{c.dailyChangePct.toFixed(2)}%
+                                            </div>
+                                          </td>
+                                          <td className="py-2 px-2 text-right text-white font-bold">
+                                            {formatCurrency(c.totalNominalValue, selectedCurrency)}
+                                          </td>
+                                          <td className="py-2 px-2 text-right">
+                                            <div className={`font-bold ${c.gainAbsolute >= 0 ? 'text-emerald-400' : 'text-rose-500'}`}>
+                                              {c.gainAbsolute >= 0 ? '+' : ''}{formatCurrency(c.gainAbsolute, selectedCurrency)}
+                                            </div>
+                                            <div className={`text-[9px] font-bold ${c.gainPercentage >= 0 ? 'text-emerald-400' : 'text-rose-500'}`}>
+                                              ({c.gainPercentage >= 0 ? '+' : ''}{c.gainPercentage.toFixed(1)}%)
+                                            </div>
+                                          </td>
+                                          <td className="py-2 px-2 text-right">
+                                            <div className="flex items-center justify-end gap-1.5">
+                                              <span className="font-bold text-sky-300">{c.weightInGroup.toFixed(1)}%</span>
+                                              <div className="w-10 bg-slate-800 rounded-full h-1.5 overflow-hidden">
+                                                <div
+                                                  className="bg-sky-500 h-1.5 rounded-full"
+                                                  style={{ width: `${Math.min(100, Math.max(2, c.weightInGroup))}%` }}
+                                                />
+                                              </div>
+                                            </div>
+                                          </td>
+                                          <td className="py-2 px-2 text-right text-slate-400 font-semibold">
+                                            {c.weightInPortfolio.toFixed(1)}%
+                                          </td>
+                                        </tr>
+                                      ))}
+                                    </tbody>
+                                  </table>
+                                </div>
+                              </div>
+                            )}
+
+                            {/* Open Lots Table */}
+                            <div className="space-y-3 bg-slate-900/60 border border-slate-800/90 rounded-xl p-4">
+                              <div className="flex items-center justify-between border-b border-slate-800 pb-2">
+                                <h4 className="font-black text-xs text-emerald-400 uppercase tracking-wider flex items-center gap-1.5">
+                                  <Layers className="w-3.5 h-3.5" />
+                                  {pos.isGroup ? `${t.openLotsTitle} - ${pos.symbol} (${pos.activeLots.length})` : `${t.openLotsTitle} - ${pos.symbol}`}
+                                </h4>
+                                <span className="text-[11px] text-slate-400 font-mono">
+                                  PMC Totale: <strong className="text-amber-400">{formatCurrency(pos.pmc, selectedCurrency)}</strong>
+                                </span>
+                              </div>
+
+                              <div className="overflow-x-auto">
+                                <table className="w-full text-left text-[11px] font-mono">
+                                  <thead>
+                                    <tr className="text-slate-500 border-b border-slate-800/60 pb-1">
+                                      <th className="py-1.5 px-2">{t.lotOriginalDate}</th>
+                                      {pos.isGroup && <th className="py-1.5 px-2">{t.colTicker}</th>}
+                                      <th className="py-1.5 px-2">{t.lotPortfolio}</th>
+                                      <th className="py-1.5 px-2 text-right">{t.lotRemainingQty}</th>
+                                      <th className="py-1.5 px-2 text-right">{t.lotPurchasePrice}</th>
+                                      <th className="py-1.5 px-2 text-right">{t.lotTotalInvested}</th>
+                                      <th className="py-1.5 px-2 text-right">{t.lotCurrentValue}</th>
+                                      <th className="py-1.5 px-2 text-right">{t.lotGainLoss}</th>
+                                    </tr>
+                                  </thead>
+                                  <tbody className="divide-y divide-slate-800/40">
+                                    {pos.activeLots.map((lot, idx) => {
+                                      const lotBuyInDisplay = convertValue(
+                                        lot.buyPrice,
+                                        lot.currency || 'EUR',
+                                        selectedCurrency,
+                                        lot.originalDate.split('T')[0]
+                                      );
+                                      const lotInvested = convertValue(
+                                        lot.remainingQty * lot.buyPrice,
+                                        lot.currency || 'EUR',
+                                        selectedCurrency,
+                                        lot.originalDate.split('T')[0]
+                                      );
+                                      const lotCurrentVal = lot.remainingQty * (pos.isGroup && lot.symbol && tickerMetrics[lot.symbol] ? tickerMetrics[lot.symbol].todayPriceInDisplay : pos.todayPriceInDisplay);
+                                      const lotGainAbs = lotCurrentVal - lotInvested;
+                                      const lotGainPct = lotInvested > 0 ? (lotGainAbs / lotInvested) * 100 : 0;
+                                      const isTransfer = !!(lot.transferId || lot.parentTransactionId);
+                                      const isPartial = lot.qty > 0 && Math.abs(lot.qty - lot.remainingQty) > 1e-12;
+                                      const originalInvested = convertValue(
+                                        lot.qty * lot.buyPrice,
+                                        lot.currency || 'EUR',
+                                        selectedCurrency,
+                                        lot.originalDate.split('T')[0]
+                                      );
+
+                                      return (
+                                        <tr key={lot.id + '-' + idx} className="hover:bg-slate-800/20">
+                                          <td className="py-2 px-2 text-slate-300">
+                                            <div className="font-bold text-slate-200">
+                                              {formatDateString(lot.originalDate, lang)}
+                                            </div>
+                                            {isPartial && (
+                                              <span className="text-[10px] text-amber-400 block font-normal">
+                                                Residuo lotto BUY del {formatDateString(lot.originalDate, lang)}
+                                              </span>
+                                            )}
+                                          </td>
+                                          {pos.isGroup && (
+                                            <td className="py-2 px-2">
+                                              <span className="px-1.5 py-0.5 rounded bg-slate-800 border border-slate-700 text-sky-400 font-mono text-[10px] font-bold">
+                                                {lot.symbol}
+                                              </span>
+                                            </td>
+                                          )}
+                                          <td className="py-2 px-2 text-slate-300 flex items-center gap-1.5 flex-wrap">
+                                            <span>{getPortfolioName(lot.portfolioId)}</span>
+                                            {isTransfer && (
+                                              <span className="text-[9px] bg-indigo-500/20 text-indigo-300 border border-indigo-500/30 px-1.5 py-0.2 rounded font-bold">
+                                                TRASFERITO
+                                              </span>
+                                            )}
+                                            {isPartial ? (
+                                              <span className="text-[9px] bg-amber-500/20 text-amber-300 border border-amber-500/30 px-1.5 py-0.2 rounded font-bold" title="Lotto parzialmente scaricato da successive vendite">
+                                                LOTTO SCARICATO
+                                              </span>
+                                            ) : (
+                                              <span className="text-[9px] bg-emerald-500/20 text-emerald-300 border border-emerald-500/30 px-1.5 py-0.2 rounded font-bold">
+                                                INTERO
+                                              </span>
+                                            )}
+                                          </td>
+                                          <td className="py-2 px-2 text-right text-slate-200">
+                                            <div className="font-bold">
+                                              <QuantityDisplay value={lot.remainingQty} />
+                                            </div>
+                                            {isPartial && (
+                                              <span className="text-[10px] text-slate-400 font-mono block font-normal mt-0.5" title="Quantità acquistata nella transazione BUY originale (immutabile)">
+                                                Quantità acquistata nel BUY originale: {formatFullQuantity(lot.qty)}
+                                              </span>
+                                            )}
+                                          </td>
+                                          <td className="py-2 px-2 text-right text-amber-400">
+                                            <div className="font-bold">
+                                              {formatCurrency(lotBuyInDisplay, selectedCurrency)}
+                                            </div>
+                                            {lot.currency && lot.currency !== selectedCurrency && (
+                                              <span className="text-[9px] text-slate-500 block">
+                                                ({lot.buyPrice.toFixed(2)} {lot.currency})
+                                              </span>
+                                            )}
+                                          </td>
+                                          <td className="py-2 px-2 text-right text-slate-300">
+                                            <div className="font-bold text-slate-200">
+                                              {formatCurrency(lotInvested, selectedCurrency)}
+                                            </div>
+                                            {isPartial && (
+                                              <span className="text-[10px] text-slate-400 font-mono block font-normal mt-0.5" title="Costo della transazione BUY originale (immutabile)">
+                                                Costo nel BUY originale: {formatCurrency(originalInvested, selectedCurrency)}
+                                              </span>
+                                            )}
+                                          </td>
+                                          <td className="py-2 px-2 text-right text-white font-bold">
+                                            {formatCurrency(lotCurrentVal, selectedCurrency)}
+                                          </td>
+                                          <td className="py-2 px-2 text-right">
+                                            <span className={`font-bold ${lotGainAbs >= 0 ? 'text-emerald-400' : 'text-rose-500'}`}>
+                                              {lotGainAbs >= 0 ? '+' : ''}{formatCurrency(lotGainAbs, selectedCurrency)} ({lotGainPct >= 0 ? '+' : ''}{lotGainPct.toFixed(1)}%)
+                                            </span>
+                                          </td>
+                                        </tr>
+                                      );
+                                    })}
+                                  </tbody>
+                                  <tfoot>
+                                    <tr className="border-t border-slate-800 text-slate-300 text-xs font-semibold bg-slate-900/40">
+                                      <td colSpan={pos.isGroup ? 3 : 2} className="py-2 px-2 font-bold text-slate-400">
+                                        Totale Carico Storico Lotti Aperti ({pos.activeLots.length})
+                                      </td>
+                                      <td className="py-2 px-2 text-right font-bold text-slate-200">
+                                        <QuantityDisplay value={pos.sharesOwned} />
+                                      </td>
+                                      <td className="py-2 px-2 text-right text-amber-400 font-bold">
+                                        PMC {formatCurrency(pos.pmc, selectedCurrency)}
+                                      </td>
+                                      <td className="py-2 px-2 text-right font-bold text-slate-200">
+                                        {formatCurrency(pos.openLotsCostBasis ?? pos.totalCapitalInvested, selectedCurrency)}
+                                      </td>
+                                      <td className="py-2 px-2 text-right font-bold text-white">
+                                        {formatCurrency(pos.totalNominalValue, selectedCurrency)}
+                                      </td>
+                                      <td className="py-2 px-2 text-right">
+                                        <span className={`font-bold ${pos.gainAbsolute >= 0 ? 'text-emerald-400' : 'text-rose-500'}`}>
+                                          {pos.gainAbsolute >= 0 ? '+' : ''}{formatCurrency(pos.gainAbsolute, selectedCurrency)} ({pos.gainPercentage >= 0 ? '+' : ''}{pos.gainPercentage.toFixed(1)}%)
+                                        </span>
+                                      </td>
+                                    </tr>
+                                  </tfoot>
+                                </table>
+                              </div>
                             </div>
                           </div>
                         </td>

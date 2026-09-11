@@ -521,5 +521,27 @@ GainBusters est conçu pour être une **application 100% autohébergée et local
   infoPmc: 'Info CMP',
   pmcFullTitle: 'Coût Moyen Pondéré (CMP)',
   createFirstTransfer: 'Enregistrez le premier transfert entre portefeuilles',
-  transfersCountLabel: 'transferts enregistrés'
+  transfersCountLabel: 'transferts enregistrés',
+
+  // Dividend keys
+  dividendsTab: 'Dividendes',
+  dividendsTitle: 'Aperçu des Dividendes',
+  dividendsDesc: 'Synthèse des dividendes totaux perçus par portefeuille, dates de versement et historique des flux.',
+  dividendLabel: 'DIVIDENDE',
+  totalDividendsReceived: 'Total des Dividendes Perçus',
+  dividendsPerPortfolio: 'Dividendes par Portefeuille',
+  historicalPaymentDates: 'Historique des Dates de Versement',
+  paymentDate: 'Date de Versement',
+  grossDividend: 'Dividende Brut',
+  withholdingTax: 'Retenue / Frais',
+  netDividend: 'Dividende Net',
+  registerDividendBtn: 'Enregistrer un Dividende',
+  noDividendsRecorded: 'Aucun dividende enregistré pour le moment.',
+  noDividendsMatchingCriteria: 'Aucun dividende ne correspond aux critères de filtre.',
+  dividendPaymentsCount: 'Versements',
+  latestPaymentDate: 'Dernier Versement',
+  allPortfoliosOption: 'Tous les Portefeuilles',
+  dividendPerShareLabel: 'Dividende / Action',
+  topDividendPayerLabel: 'Principal Payeur',
+  viewDividendsTooltip: 'Voir l’historique des dividendes de ce portefeuille'
 };

@@ -521,5 +521,27 @@ GainBusters 被设计为一款 **100% 自托管、首重离线的本地应用**�
   infoPmc: '持仓均价信息',
   pmcFullTitle: '平均持仓成本价 (PMC)',
   createFirstTransfer: '记录首次投资组合间划转',
-  transfersCountLabel: '笔已记录划转'
+  transfersCountLabel: '笔已记录划转',
+
+  // Dividend keys
+  dividendsTab: '股息分红',
+  dividendsTitle: '股息收益概览',
+  dividendsDesc: '按投资组合汇总收到的股息分红总额、派发日期及现金流历史明细。',
+  dividendLabel: '股息',
+  totalDividendsReceived: '累计已收股息',
+  dividendsPerPortfolio: '各投资组合股息收益',
+  historicalPaymentDates: '历史派发日期记录',
+  paymentDate: '派息日期',
+  grossDividend: '税前股息',
+  withholdingTax: '预扣税 / 费用',
+  netDividend: '实收股息',
+  registerDividendBtn: '记录新股息',
+  noDividendsRecorded: '暂无记录的股息派发。',
+  noDividendsMatchingCriteria: '未找到符合筛选条件的股息记录。',
+  dividendPaymentsCount: '派息笔数',
+  latestPaymentDate: '最近派息日期',
+  allPortfoliosOption: '所有投资组合',
+  dividendPerShareLabel: '每股派息',
+  topDividendPayerLabel: '最高分红资产',
+  viewDividendsTooltip: '查看该投资组合的历史股息'
 };

@@ -5,7 +5,7 @@
 
 import React, { useState, useEffect, useRef, useMemo, useCallback } from 'react';
 import { translations } from './locales/index.ts';
-import { Currency, DBState, Account, Portfolio, Transaction, TransactionType, Transfer } from './types.ts';
+import { Currency, DBState, Account, Portfolio, Transaction, TransactionType, Transfer, InstrumentGroup } from './types.ts';
 import { encryptData, decryptData } from './utils/crypto.ts';
 import { saveFileHandleInIndexedDB, getFileHandleFromIndexedDB, clearFileHandleFromIndexedDB, getDatabaseStateFromIndexedDB } from './utils/indexedDB.ts';
 import { storageService } from './services/storageService.ts';
@@ -13,9 +13,11 @@ import { syncPricesLocally, isCryptoTicker } from './utils/syncPrices.ts';
 import MissionPage from './components/MissionPage.tsx';
 import ToolsPage from './components/ToolsPage.tsx';
 import OtherCostsPage from './components/OtherCostsPage.tsx';
+import { DividendsPage } from './components/DividendsPage.tsx';
 import { InflationPage } from './components/InflationPage.tsx';
 import InteractiveChart, { DailyBalance } from './components/InteractiveChart.tsx';
 import { PositionsTable } from './components/PositionsTable.tsx';
+import { InstrumentGroupsModal } from './components/InstrumentGroupsModal.tsx';
 import { TickerInput } from './components/TickerInput.tsx';
 import { TransactionModal } from './components/TransactionModal.tsx';
 import { TransferModal } from './components/TransferModal.tsx';
@@ -32,7 +34,9 @@ import {
   getTransferEffectiveCapital,
   cleanFloatNoise,
   getDailyPricePairForSymbol,
-  DailyPricePair
+  DailyPricePair,
+  buildAggregatedPositions,
+  matchesSymbol
 } from './utils/finance.ts';
 import { QuantityDisplay } from './components/QuantityDisplay.tsx';
 import {
@@ -69,7 +73,9 @@ import {
   Menu,
   X,
   ChevronLeft,
-  ChevronRight
+  ChevronRight,
+  Layers,
+  Sliders
 } from 'lucide-react';
 
 const defaultInitialDB: DBState = {
@@ -129,7 +135,9 @@ const defaultInitialDB: DBState = {
   accounts: [],
   portfolios: [],
   transactions: [],
+  transfers: [],
   otherCosts: [],
+  instrumentGroups: [],
   priceCache: {}
 };
 
@@ -215,8 +223,18 @@ export default function App() {
   const [activeBenchmark, setActiveBenchmark] = useState<string>('NONE');
   const [benchmarkSymbol, setBenchmarkSymbol] = useState<string>('SWDA.MI');
   const [inflationToggle, setInflationToggle] = useState<boolean>(false);
-  const [dashFilter, setDashFilter] = useState<{ type: 'ALL' | 'ACCOUNT' | 'PORTFOLIO' | 'TICKER'; id: string }>({ type: 'ALL', id: '' });
+  const [dashFilter, setDashFilter] = useState<{ type: 'ALL' | 'ACCOUNT' | 'PORTFOLIO' | 'TICKER' | 'GROUP'; id: string }>({ type: 'ALL', id: '' });
   const [newCurrencyInput, setNewCurrencyInput] = useState<string>('');
+  const [isGroupsModalOpen, setIsGroupsModalOpen] = useState<boolean>(false);
+  const [isAggregatedView, setIsAggregatedView] = useState<boolean>(() => {
+    return db.settings?.aggregateInstrumentsView !== undefined ? !!db.settings.aggregateInstrumentsView : true;
+  });
+
+  useEffect(() => {
+    if (db.settings?.aggregateInstrumentsView !== undefined) {
+      setIsAggregatedView(!!db.settings.aggregateInstrumentsView);
+    }
+  }, [db.settings?.aggregateInstrumentsView]);
 
   useEffect(() => {
     if (db.settings?.includeCommissions !== undefined) {
@@ -829,6 +847,17 @@ export default function App() {
     }
 
     try {
+      if (typeof pendingFileHandle.queryPermission === 'function') {
+        try {
+          let perm = await pendingFileHandle.queryPermission({ mode: 'readwrite' });
+          if (perm !== 'granted' && typeof pendingFileHandle.requestPermission === 'function') {
+            await pendingFileHandle.requestPermission({ mode: 'readwrite' });
+          }
+        } catch (permErr) {
+          console.warn('[Unlock Pending] File permission request error:', permErr);
+        }
+      }
+
       const file = await pendingFileHandle.getFile();
       const rawText = await file.text();
       if (!rawText || rawText.trim().length === 0) {
@@ -913,6 +942,17 @@ export default function App() {
     }
 
     try {
+      if (fileHandle && typeof fileHandle.queryPermission === 'function') {
+        try {
+          let perm = await fileHandle.queryPermission({ mode: 'readwrite' });
+          if (perm !== 'granted' && typeof fileHandle.requestPermission === 'function') {
+            await fileHandle.requestPermission({ mode: 'readwrite' });
+          }
+        } catch (permErr) {
+          console.warn('[Unlock] File permission request error:', permErr);
+        }
+      }
+
       storageService.setBrowserPassword(passwordInput);
       if (fileHandle) {
         storageService.setFileHandle(fileHandle);
@@ -1039,12 +1079,24 @@ export default function App() {
     try {
       const loadedDb = await storageService.loadDatabaseState();
       if (loadedDb && loadedDb.settings) {
-        lastPersistedDbJsonRef.current = JSON.stringify(loadedDb);
+        const fullDb: DBState = {
+          ...defaultInitialDB,
+          ...loadedDb,
+          settings: { ...defaultInitialDB.settings, ...loadedDb.settings },
+          accounts: Array.isArray(loadedDb.accounts) ? loadedDb.accounts : [],
+          portfolios: Array.isArray(loadedDb.portfolios) ? loadedDb.portfolios : [],
+          transactions: Array.isArray(loadedDb.transactions) ? loadedDb.transactions : [],
+          transfers: Array.isArray(loadedDb.transfers) ? loadedDb.transfers : [],
+          otherCosts: Array.isArray(loadedDb.otherCosts) ? loadedDb.otherCosts : [],
+          instrumentGroups: Array.isArray(loadedDb.instrumentGroups) ? loadedDb.instrumentGroups : [],
+          priceCache: (loadedDb.priceCache && typeof loadedDb.priceCache === 'object') ? loadedDb.priceCache : {}
+        };
+        lastPersistedDbJsonRef.current = JSON.stringify(fullDb);
         isInitialHydrationRef.current = false;
-        setDb(loadedDb);
-        triggerPriceSync(loadedDb);
-        if (loadedDb.settings.lang) {
-          setLang(loadedDb.settings.lang);
+        setDb(fullDb);
+        triggerPriceSync(fullDb);
+        if (fullDb.settings.lang) {
+          setLang(fullDb.settings.lang);
         }
       } else if (db && db.settings) {
         lastPersistedDbJsonRef.current = JSON.stringify(db);
@@ -1060,6 +1112,7 @@ export default function App() {
   };
 
   const triggerPriceSync = async (stateObj: DBState, force: boolean = false) => {
+    if (!storageService.hasActiveSession()) return;
     const activeSymbols = Array.from(new Set(stateObj.transactions.map(t => t.symbol.toUpperCase())));
     // Include benchmark symbol if preset
     if (activeBenchmark === 'TICKER' && benchmarkSymbol) {
@@ -1086,6 +1139,7 @@ export default function App() {
     setSyncFeedback({ message: t.connectionToYahoo, type: 'info' });
     try {
       const updatedDb = await syncPricesLocally(activeSymbols, force, stateObj);
+      if (!storageService.hasActiveSession()) return;
       const newPriceCache = updatedDb.priceCache || {};
       const current = dbRef.current || stateObj;
       const mergedDb: DBState = {
@@ -1096,6 +1150,7 @@ export default function App() {
         }
       };
       await saveDatabaseState(mergedDb);
+      await storageService.flushPendingSaves();
       setSyncFeedback({ message: t.quotesUpdatedSuccess, type: 'success' });
       setTimeout(() => setSyncFeedback(null), 4000);
     } catch (err) {
@@ -1114,6 +1169,7 @@ export default function App() {
   // Account filter
   let activePortIds: string[] = [];
   let tickerFilterSymbol: string | null = null;
+  let groupFilterSymbols: string[] | null = null;
 
   if (dashFilter.type === 'ALL') {
     const activeAccounts = db.accounts.filter(a => a.includeInDashboard);
@@ -1127,12 +1183,24 @@ export default function App() {
   } else if (dashFilter.type === 'TICKER') {
     activePortIds = db.portfolios.map(p => p.id);
     tickerFilterSymbol = dashFilter.id.toUpperCase();
+  } else if (dashFilter.type === 'GROUP') {
+    activePortIds = db.portfolios.map(p => p.id);
+    const grp = (db.instrumentGroups || []).find(g => g.id === dashFilter.id);
+    if (grp) {
+      groupFilterSymbols = grp.tickerSymbols.map(s => s.toUpperCase());
+    }
   }
+
+  const activeTargetSymbolFilter: string | string[] | null = groupFilterSymbols || tickerFilterSymbol;
 
   // Transactions list matching active settings
   let filteredTx = db.transactions.filter(t => activePortIds.includes(t.portfolioId));
-  if (tickerFilterSymbol) {
-    filteredTx = filteredTx.filter(t => t.symbol.toUpperCase() === tickerFilterSymbol);
+  if (activeTargetSymbolFilter) {
+    if (Array.isArray(activeTargetSymbolFilter)) {
+      filteredTx = filteredTx.filter(t => activeTargetSymbolFilter.includes(t.symbol.toUpperCase()));
+    } else {
+      filteredTx = filteredTx.filter(t => t.symbol.toUpperCase() === activeTargetSymbolFilter);
+    }
   }
 
   // Sort chronologically
@@ -1227,7 +1295,7 @@ export default function App() {
     getTickerCurrency,
     todayStr,
     yesterdayStr,
-    tickerFilterSymbol,
+    activeTargetSymbolFilter,
     getDailyPricePair
   );
 
@@ -1367,7 +1435,7 @@ export default function App() {
         activePortIds,
         convertValue,
         selectedCurrency,
-        tickerFilterSymbol,
+        activeTargetSymbolFilter,
         dateString
       );
 
@@ -1407,7 +1475,7 @@ export default function App() {
       activeTxSorted.forEach((tx) => {
         const txDate = tx.date.split('T')[0];
         if (txDate > dateString) return;
-        if (tickerFilterSymbol && tx.symbol.toUpperCase().trim() !== tickerFilterSymbol.toUpperCase().trim()) return;
+        if (activeTargetSymbolFilter && !matchesSymbol(tx.symbol, activeTargetSymbolFilter)) return;
 
         const valInDisplay = convertValue(
           tx.qty * tx.price,
@@ -1566,15 +1634,49 @@ export default function App() {
       convertValue,
       undefined,
       undefined,
-      tickerFilterSymbol
+      activeTargetSymbolFilter
     );
-  }, [dailyBalances, db.transactions, activePortIds, activeOtherCosts, includeCommissions, selectedCurrency, convertValue, tickerFilterSymbol]);
+  }, [dailyBalances, db.transactions, activePortIds, activeOtherCosts, includeCommissions, selectedCurrency, convertValue, activeTargetSymbolFilter]);
 
   // Allocation matrix
   const getAssetAllocationMatrix = () => {
-    const allocations: { symbol: string; value: number; weight: number; target: number }[] = [];
     if (totalNominalValue === 0) return [];
 
+    if (isAggregatedView) {
+      const aggPositions = buildAggregatedPositions(
+        tickerMetrics,
+        db.instrumentGroups || [],
+        totalNominalValue,
+        true
+      );
+
+      return aggPositions.map((pos) => {
+        const dbTarget = db.settings?.targetWeights?.[pos.symbol]
+          ?? db.settings?.targetWeights?.[pos.symbol.toUpperCase()]
+          ?? (pos.groupId ? db.settings?.targetWeights?.[pos.groupId] : undefined);
+        const targetPercent = dbTarget !== undefined 
+          ? dbTarget 
+          : (localStorage.getItem(`gainbusters_target_weight_${pos.symbol}`) ? Number(localStorage.getItem(`gainbusters_target_weight_${pos.symbol}`)) : 0);
+
+        return {
+          symbol: pos.symbol,
+          value: pos.totalNominalValue,
+          weight: pos.weight,
+          target: targetPercent,
+          isGroup: pos.isGroup,
+          groupId: pos.groupId,
+          constituentSymbols: pos.constituentSymbols,
+          constituents: pos.constituents?.map(c => ({
+            symbol: c.symbol,
+            value: c.totalNominalValue,
+            weight: c.weightInPortfolio,
+            weightInGroup: c.weightInGroup
+          }))
+        };
+      });
+    }
+
+    const allocations: any[] = [];
     Object.keys(tickerMetrics).forEach((sym) => {
       const met = tickerMetrics[sym];
       if (met.sharesOwned <= 0) return;
@@ -1587,7 +1689,8 @@ export default function App() {
       const weightPercent = (val / totalNominalValue) * 100;
 
       // Deduce target weight or default to even share splits
-      const dbTarget = db.settings?.targetWeights?.[sym];
+      const dbTarget = db.settings?.targetWeights?.[sym]
+        ?? db.settings?.targetWeights?.[sym.toUpperCase()];
       const targetPercent = dbTarget !== undefined 
         ? dbTarget 
         : (localStorage.getItem(`gainbusters_target_weight_${sym}`) ? Number(localStorage.getItem(`gainbusters_target_weight_${sym}`)) : 0);
@@ -1596,7 +1699,8 @@ export default function App() {
         symbol: sym,
         value: val,
         weight: weightPercent,
-        target: targetPercent
+        target: targetPercent,
+        isGroup: false
       });
     });
 
@@ -1605,18 +1709,67 @@ export default function App() {
 
   const assetAllocation = getAssetAllocationMatrix();
 
-  const handleUpdateTargetWeight = async (symbol: string, val: number) => {
+  const handleUpdateTargetWeight = async (symbolOrKey: string, val: number) => {
+    const currentDb = dbRef.current || db;
+    const cleanVal = isNaN(val) ? 0 : Math.max(0, Math.min(100, val));
+    const upperKey = (symbolOrKey || '').toUpperCase().trim();
     const updatedSettings = {
-      ...db.settings,
+      ...currentDb.settings,
       targetWeights: {
-        ...(db.settings?.targetWeights || {}),
-        [symbol.toUpperCase()]: val
+        ...(currentDb.settings?.targetWeights || {}),
+        [symbolOrKey]: cleanVal,
+        [upperKey]: cleanVal
       }
     };
     const updatedDb = {
-      ...db,
+      ...currentDb,
       settings: updatedSettings
     };
+    await saveDatabaseState(updatedDb);
+  };
+
+  const handleToggleAggregatedView = async () => {
+    const nextVal = !isAggregatedView;
+    setIsAggregatedView(nextVal);
+    const currentDb = dbRef.current || db;
+    const updatedDb = {
+      ...currentDb,
+      settings: {
+        ...currentDb.settings,
+        aggregateInstrumentsView: nextVal
+      }
+    };
+    await saveDatabaseState(updatedDb);
+  };
+
+  const handleSaveInstrumentGroup = async (group: InstrumentGroup) => {
+    const currentDb = dbRef.current || db;
+    const existingGroups = currentDb.instrumentGroups || [];
+    const idx = existingGroups.findIndex(g => g.id === group.id);
+    let updatedGroups: InstrumentGroup[];
+    if (idx >= 0) {
+      updatedGroups = [...existingGroups];
+      updatedGroups[idx] = group;
+    } else {
+      updatedGroups = [...existingGroups, group];
+    }
+    const updatedDb = {
+      ...currentDb,
+      instrumentGroups: updatedGroups
+    };
+    await saveDatabaseState(updatedDb);
+  };
+
+  const handleDeleteInstrumentGroup = async (groupId: string) => {
+    const currentDb = dbRef.current || db;
+    const updatedGroups = (currentDb.instrumentGroups || []).filter(g => g.id !== groupId);
+    const updatedDb = {
+      ...currentDb,
+      instrumentGroups: updatedGroups
+    };
+    if (dashFilter.type === 'GROUP' && dashFilter.id === groupId) {
+      setDashFilter({ type: 'ALL', id: '' });
+    }
     await saveDatabaseState(updatedDb);
   };
 
@@ -1842,7 +1995,12 @@ export default function App() {
   // Transactions CRUD
   const saveTransactionMutation = () => {
     setFormErr('');
-    if (!txForm.portfolioId || !txForm.symbol.trim() || txForm.qty <= 0 || txForm.price <= 0) {
+    const txQty = Number(txForm.qty);
+    const txPrice = Number(txForm.price);
+    const isDividend = txForm.type === TransactionType.DIVIDEND;
+    const finalQty = isDividend && (isNaN(txQty) || txQty <= 0) ? 1 : txQty;
+
+    if (!txForm.portfolioId || !txForm.symbol.trim() || finalQty <= 0 || txPrice <= 0) {
       setFormErr(t.validationErrorAllFieldsRequired);
       return;
     }
@@ -1860,7 +2018,7 @@ export default function App() {
             date: txForm.date || new Date().toISOString(),
             type: txForm.type,
             symbol: txForm.symbol.trim().toUpperCase(),
-            qty: Number(txForm.qty),
+            qty: finalQty,
             price: Number(txForm.price),
             commission: Number(txForm.commission || 0),
             currency: txForm.currency,
@@ -1878,7 +2036,7 @@ export default function App() {
         date: txForm.date || new Date().toISOString(),
         type: txForm.type,
         symbol: txForm.symbol.trim().toUpperCase(),
-        qty: Number(txForm.qty),
+        qty: finalQty,
         price: Number(txForm.price),
         commission: Number(txForm.commission || 0),
         currency: txForm.currency,
@@ -1975,6 +2133,8 @@ export default function App() {
         return 'bg-emerald-500/10 text-emerald-400 border border-emerald-500/20';
       case TransactionType.SELL:
         return 'bg-rose-500/10 text-rose-400 border border-rose-500/20';
+      case TransactionType.DIVIDEND:
+        return 'bg-cyan-500/10 text-cyan-400 border border-cyan-500/20';
       case TransactionType.TRANSFER_IN:
         return 'bg-amber-500/10 text-amber-400 border border-amber-500/20';
       case TransactionType.TRANSFER_OUT:
@@ -1990,6 +2150,8 @@ export default function App() {
         return t.buyBtn || 'BUY';
       case TransactionType.SELL:
         return t.sellBtn || 'SELL';
+      case TransactionType.DIVIDEND:
+        return t.dividendLabel || 'DIVIDEND';
       case TransactionType.TRANSFER_IN:
         return t.transferInBadge || 'TRANSFER IN';
       case TransactionType.TRANSFER_OUT:
@@ -1997,6 +2159,28 @@ export default function App() {
       default:
         return type;
     }
+  };
+
+  const handleOpenNewDividend = (portfolioId?: string) => {
+    const targetPortId = portfolioId || (db.portfolios[0]?.id || '');
+    const prt = db.portfolios.find(p => p.id === targetPortId);
+    const acc = prt ? db.accounts.find(a => a.id === prt.accountId) : null;
+    const accCurr = acc?.currency || db.settings.defaultCurrency || 'EUR';
+    setTxForm({
+      open: true,
+      editId: null,
+      portfolioId: targetPortId,
+      date: new Date().toISOString().substring(0, 16),
+      type: TransactionType.DIVIDEND,
+      symbol: '',
+      qty: '1',
+      price: '',
+      commission: '',
+      currency: accCurr,
+      commissionCurrency: accCurr,
+      notes: ''
+    });
+    setFormErr('');
   };
 
   const saveTransferMutation = () => {
@@ -3229,39 +3413,78 @@ export default function App() {
     reader.readAsText(file);
   };
 
-  const executeOverwrite = () => {
-    if (!pendingImport) return;
-    const newDb: DBState = {
-      settings: pendingImport.settings || db.settings,
-      accounts: pendingImport.accounts || [],
-      portfolios: pendingImport.portfolios || [],
-      transactions: pendingImport.transactions || [],
-      transfers: pendingImport.transfers || [],
-      otherCosts: pendingImport.otherCosts || [],
-      priceCache: pendingImport.priceCache || {}
-    };
-    saveDatabaseState(newDb);
-    setPendingImport(null);
+  const handleLogout = async () => {
+    try {
+      const currentDb = dbRef.current || db;
+      await storageService.saveDatabaseState(currentDb);
+      await storageService.flushPendingSaves();
+    } catch (e) {
+      console.warn('[Logout] Flush error:', e);
+    }
+    setIsAuthenticated(false);
+    setPasswordInput('');
+    sessionStorage.removeItem('gainbusters_local_token');
+    storageService.clearSession();
+    await checkAuthStatus();
   };
 
-  const executeMerge = () => {
+  const executeOverwrite = async () => {
     if (!pendingImport) return;
+
+    const currentDb = dbRef.current || db;
+    const mergedSettings = {
+      ...currentDb.settings,
+      ...(pendingImport.settings || {}),
+      passwordHash: currentDb.settings?.passwordHash,
+      passwordSet: currentDb.settings?.passwordSet ?? true,
+      inflationIndices: (pendingImport.settings?.inflationIndices && pendingImport.settings.inflationIndices.length > 0)
+        ? pendingImport.settings.inflationIndices
+        : (currentDb.settings?.inflationIndices || defaultInitialDB.settings.inflationIndices)
+    };
+
     const newDb: DBState = {
-      ...db,
+      settings: mergedSettings,
+      accounts: Array.isArray(pendingImport.accounts) ? pendingImport.accounts : [],
+      portfolios: Array.isArray(pendingImport.portfolios) ? pendingImport.portfolios : [],
+      transactions: Array.isArray(pendingImport.transactions) ? pendingImport.transactions : [],
+      transfers: Array.isArray(pendingImport.transfers) ? pendingImport.transfers : [],
+      otherCosts: Array.isArray(pendingImport.otherCosts) ? pendingImport.otherCosts : [],
+      instrumentGroups: Array.isArray(pendingImport.instrumentGroups) ? pendingImport.instrumentGroups : [],
+      priceCache: (pendingImport.priceCache && typeof pendingImport.priceCache === 'object') ? pendingImport.priceCache : {}
+    };
+
+    await saveDatabaseState(newDb);
+    await storageService.flushPendingSaves();
+    setPendingImport(null);
+    triggerPriceSync(newDb);
+  };
+
+  const executeMerge = async () => {
+    if (!pendingImport) return;
+
+    const currentDb = dbRef.current || db;
+    const newDb: DBState = {
+      ...currentDb,
       settings: {
-        ...db.settings,
+        ...currentDb.settings,
         ...(pendingImport.settings || {}),
+        passwordHash: currentDb.settings?.passwordHash,
+        passwordSet: currentDb.settings?.passwordSet ?? true,
         targetWeights: {
-          ...(db.settings?.targetWeights || {}),
+          ...(currentDb.settings?.targetWeights || {}),
           ...(pendingImport.settings?.targetWeights || {})
-        }
+        },
+        inflationIndices: (pendingImport.settings?.inflationIndices && pendingImport.settings.inflationIndices.length > 0)
+          ? pendingImport.settings.inflationIndices
+          : (currentDb.settings?.inflationIndices || defaultInitialDB.settings.inflationIndices)
       },
-      portfolios: [...db.portfolios],
-      accounts: [...db.accounts],
-      transactions: [...db.transactions],
-      transfers: [...(db.transfers || [])],
-      otherCosts: [...(db.otherCosts || [])],
-      priceCache: JSON.parse(JSON.stringify(db.priceCache))
+      portfolios: [...currentDb.portfolios],
+      accounts: [...currentDb.accounts],
+      transactions: [...currentDb.transactions],
+      transfers: [...(currentDb.transfers || [])],
+      otherCosts: [...(currentDb.otherCosts || [])],
+      instrumentGroups: [...(currentDb.instrumentGroups || [])],
+      priceCache: JSON.parse(JSON.stringify(currentDb.priceCache || {}))
     };
 
     if (pendingImport.portfolios) {
@@ -3294,6 +3517,17 @@ export default function App() {
       });
     }
 
+    if (pendingImport.instrumentGroups) {
+      pendingImport.instrumentGroups.forEach((g: InstrumentGroup) => {
+        const existingIdx = newDb.instrumentGroups!.findIndex(ex => ex.id === g.id);
+        if (existingIdx >= 0) {
+          newDb.instrumentGroups![existingIdx] = g;
+        } else {
+          newDb.instrumentGroups!.push(g);
+        }
+      });
+    }
+
     if (pendingImport.priceCache) {
       Object.keys(pendingImport.priceCache).forEach(symbol => {
         if (!newDb.priceCache[symbol]) {
@@ -3308,8 +3542,10 @@ export default function App() {
       });
     }
 
-    saveDatabaseState(newDb);
+    await saveDatabaseState(newDb);
+    await storageService.flushPendingSaves();
     setPendingImport(null);
+    triggerPriceSync(newDb);
   };
 
   return (
@@ -3378,12 +3614,7 @@ export default function App() {
             </select>
 
             <button
-              onClick={() => {
-                setIsAuthenticated(false);
-                setPasswordInput('');
-                sessionStorage.removeItem('gainbusters_local_token');
-                storageService.clearSession();
-              }}
+              onClick={handleLogout}
               className="text-slate-400 hover:text-white transition p-2 hover:bg-slate-900 rounded hidden sm:block"
               title={t.logout}
             >
@@ -3432,6 +3663,7 @@ export default function App() {
               {[
                 { id: 'dashboard', label: t.dashboard, icon: Home },
                 { id: 'brokers', label: t.accountsPortfolios, icon: Briefcase },
+                { id: 'dividends', label: t.dividendsTab || 'Dividendi', icon: DollarSign },
                 { id: 'otherCosts', label: t.otherCostsTab, icon: Percent },                
                 { id: 'inflation', label: t.inflationTitle, icon: TrendingUp },
                 { id: 'tools', label: t.tools, icon: Calculator },
@@ -3467,12 +3699,7 @@ export default function App() {
             {isMobileMenuOpen && (
               <div className="mt-auto pt-4 border-t border-slate-800/80 lg:hidden">
                 <button
-                  onClick={() => {
-                    setIsAuthenticated(false);
-                    setPasswordInput('');
-                    sessionStorage.removeItem('gainbusters_local_token');
-                    storageService.clearSession();
-                  }}
+                  onClick={handleLogout}
                   className="w-full flex items-center gap-3 px-3.5 py-2.5 rounded-xl text-left text-sm font-semibold transition-all duration-300 text-rose-400 hover:text-rose-300 hover:bg-rose-950/30"
                 >
                   <LogOut className="w-4 h-4 shrink-0" />
@@ -3536,6 +3763,7 @@ export default function App() {
                           {dashFilter.type === 'ACCOUNT' && `${t.brokerLabel}: ${db.accounts.find(a => a.id === dashFilter.id)?.name || dashFilter.id}`}
                           {dashFilter.type === 'PORTFOLIO' && `${t.portfolioLabel}: ${db.portfolios.find(p => p.id === dashFilter.id)?.name || dashFilter.id}`}
                           {dashFilter.type === 'TICKER' && `${t.instrumentLabel}: ${dashFilter.id}`}
+                          {dashFilter.type === 'GROUP' && `${t.groupLabel || 'Gruppo'}: ${(db.instrumentGroups || []).find(g => g.id === dashFilter.id)?.name || dashFilter.id}`}
                         </span>
                       </div>
                     </div>
@@ -3591,6 +3819,23 @@ export default function App() {
                     >
                       {t.tickerOnlyLabel}
                     </button>
+
+                    {(db.instrumentGroups || []).length > 0 && (
+                      <button
+                        onClick={() => {
+                          const firstGroup = (db.instrumentGroups || [])[0];
+                          setDashFilter({ type: 'GROUP', id: firstGroup ? firstGroup.id : '' });
+                        }}
+                        className={`px-3 py-1.5 text-xs font-bold rounded-xl border cursor-pointer transition-all duration-300 flex items-center gap-1.5 ${
+                          dashFilter.type === 'GROUP'
+                            ? 'bg-emerald-600 text-white border-emerald-500 shadow-md shadow-emerald-950/40'
+                            : 'bg-slate-950/60 border-slate-800/80 text-slate-400 hover:text-white'
+                        }`}
+                      >
+                        <Layers className="w-3.5 h-3.5" />
+                        <span>{t.groupLabel || 'Gruppo'}</span>
+                      </button>
+                    )}
                   </div>
                 </div>
 
@@ -3654,6 +3899,27 @@ export default function App() {
                         Array.from(new Set(db.transactions.map(t => t.symbol.toUpperCase()))).sort().map(sym => (
                           <option key={sym} value={sym} className="bg-slate-950 text-white font-mono font-bold">
                             {sym}
+                          </option>
+                        ))
+                      )}
+                    </select>
+                  </div>
+                )}
+
+                {dashFilter.type === 'GROUP' && (
+                  <div className="pt-3 border-t border-slate-800/40 animate-fade-in flex flex-col sm:flex-row sm:items-center gap-3">
+                    <span className="text-xs text-slate-400 font-bold sm:w-44">{t.selectGroupLabel || 'Seleziona Gruppo'}</span>
+                    <select
+                      value={dashFilter.id}
+                      onChange={(e) => setDashFilter({ type: 'GROUP', id: e.target.value })}
+                      className="bg-slate-950/80 text-white border border-slate-800 text-xs px-3 py-2 rounded-xl focus:outline-none focus:ring-2 focus:ring-emerald-500/20 w-full sm:max-w-md font-bold"
+                    >
+                      {(db.instrumentGroups || []).length === 0 ? (
+                        <option value="">{t.noGroupsConfigured || 'Nessun gruppo configurato'}</option>
+                      ) : (
+                        (db.instrumentGroups || []).map(grp => (
+                          <option key={grp.id} value={grp.id} className="bg-slate-950 text-white">
+                            {grp.name} ({grp.tickerSymbols.join(', ')})
                           </option>
                         ))
                       )}
@@ -3857,7 +4123,7 @@ export default function App() {
                 activeOtherCosts={activeOtherCosts}
                 allTransactions={db.transactions}
                 activePortIds={activePortIds}
-                targetSymbol={tickerFilterSymbol}
+                targetSymbol={activeTargetSymbolFilter}
                 convertValue={convertValue}
                 selectedCurrency={selectedCurrency}
                 inflationIndices={db.settings.inflationIndices}
@@ -3866,6 +4132,14 @@ export default function App() {
                   const newDb = { ...db, settings: { ...db.settings, selectedInflationId: id } };
                   saveDatabaseState(newDb);
                 }}
+                isAggregatedView={isAggregatedView}
+                onToggleAggregatedView={handleToggleAggregatedView}
+                onOpenGroupsManager={() => setIsGroupsModalOpen(true)}
+                onSelectGroup={(groupId) => {
+                  setDashFilter({ type: 'GROUP', id: groupId });
+                  window.scrollTo({ top: 0, behavior: 'smooth' });
+                }}
+                instrumentGroupsCount={(db.instrumentGroups || []).length}
                 positionsTableNode={
                   <PositionsTable
                     t={t}
@@ -3880,6 +4154,14 @@ export default function App() {
                       window.scrollTo({ top: 0, behavior: 'smooth' });
                     }}
                     formatCurrency={formatCurrency}
+                    instrumentGroups={db.instrumentGroups || []}
+                    isAggregatedView={isAggregatedView}
+                    onToggleAggregatedView={handleToggleAggregatedView}
+                    onOpenGroupsManager={() => setIsGroupsModalOpen(true)}
+                    onSelectGroup={(groupId) => {
+                      setDashFilter({ type: 'GROUP', id: groupId });
+                      window.scrollTo({ top: 0, behavior: 'smooth' });
+                    }}
                   />
                 }
               />
@@ -4244,36 +4526,6 @@ export default function App() {
                 dbTransfersRaw={db.transfers}
               />
 
-              {/* Modals for Transaction and Transfer */}
-              <TransactionModal
-                isOpen={txForm.open}
-                onClose={() => setTxForm({ open: false, editId: null, portfolioId: '', date: '', type: TransactionType.BUY, symbol: '', qty: '', price: '', commission: '', currency: 'EUR', commissionCurrency: 'EUR', notes: '' })}
-                txForm={txForm}
-                setTxForm={setTxForm}
-                onSave={saveTransactionMutation}
-                formErr={formErr}
-                db={db}
-                t={t}
-                activeCurrencies={activeCurrencies}
-                lang={lang}
-              />
-
-              <TransferModal
-                isOpen={transferForm.open}
-                onClose={() => setTransferForm({ open: false, editTransferId: null, sourcePortfolioId: '', destPortfolioId: '', symbol: '', qty: '', price: '', priceCurrency: 'EUR', sourceCommission: '', sourceCommissionCurrency: 'EUR', sourceCommissionPaymentMode: 'EXTERNAL', destCommission: '', destCommissionCurrency: 'EUR', destCommissionPaymentMode: 'EXTERNAL', date: new Date().toISOString().substring(0, 16), criteria: 'FIFO', notes: '' })}
-                transferForm={transferForm}
-                setTransferForm={setTransferForm}
-                onSave={saveTransferMutation}
-                formErr={formErr}
-                db={db}
-                t={t}
-                activeCurrencies={activeCurrencies}
-                getAvailableTickersForSource={getAvailableTickersForSource}
-                getAvailableLots={getAvailableLots}
-                formatFullQuantity={formatFullQuantity}
-                lang={lang}
-              />
-
               {/* Master Register listing all historical Transactions */}
               <div className="bg-slate-900/40 p-6 rounded-2xl border border-slate-800/80 space-y-4 shadow-sm">
                 <div className="flex flex-col md:flex-row items-start md:items-center justify-between gap-3 border-b border-slate-800/60 pb-3">
@@ -4427,7 +4679,7 @@ export default function App() {
                         <>
                           <div className="fixed inset-0 z-10" onClick={() => setTypeDropdownOpen(false)}></div>
                           <div className="absolute left-0 mt-1 w-full bg-slate-900 border border-slate-800 rounded-lg shadow-xl z-20 p-2 space-y-1 max-h-60 overflow-y-auto">
-                            {[TransactionType.BUY, TransactionType.SELL, TransactionType.TRANSFER_IN, TransactionType.TRANSFER_OUT].map((typ) => {
+                            {[TransactionType.BUY, TransactionType.SELL, TransactionType.DIVIDEND, TransactionType.TRANSFER_IN, TransactionType.TRANSFER_OUT].map((typ) => {
                               const isChecked = txFilterTypes.includes(typ);
                               return (
                                 <label
@@ -5187,6 +5439,20 @@ export default function App() {
             </div>
           )}
 
+          {/* TAB: DIVIDENDS OVERVIEW & HISTORICAL PAYMENTS */}
+          {activeTab === 'dividends' && (
+            <DividendsPage
+              db={db}
+              selectedCurrency={selectedCurrency}
+              convertValue={convertValue}
+              t={t}
+              lang={lang}
+              onOpenNewDividend={handleOpenNewDividend}
+              onEditTransaction={handleEditClick}
+              onDeleteTransaction={requestDeleteTransaction}
+            />
+          )}
+
           {/* TAB: OTHER COSTS (FEES & TAXES) */}
           {activeTab === 'otherCosts' && (
             <OtherCostsPage
@@ -5389,6 +5655,40 @@ export default function App() {
                         );
                       })}
                     </div>
+                  </div>
+
+                  {/* Instrument Groups Management */}
+                  <div className="space-y-3 pt-3 border-t border-slate-800/80">
+                    <div className="flex items-center justify-between">
+                      <div>
+                        <div className="text-white text-xs font-semibold flex items-center gap-1.5">
+                          <Layers className="w-3.5 h-3.5 text-emerald-400" />
+                          <span>{t.instrumentGroupsManagerTitle || 'Raggruppamento Strumenti'}</span>
+                        </div>
+                        <p className="text-[11px] text-slate-400 mt-0.5">
+                          {t.instrumentGroupsManagerDesc || 'Raggruppa manualmente ticker multipli dello stesso strumento (es. VWCE.MI e VWCE.DE)'}
+                        </p>
+                      </div>
+                      <button
+                        type="button"
+                        onClick={() => setIsGroupsModalOpen(true)}
+                        className="px-3 py-1.5 bg-emerald-500/10 hover:bg-emerald-500/20 text-emerald-400 border border-emerald-500/20 hover:border-emerald-500/30 rounded-xl text-xs font-bold transition flex items-center gap-1.5 cursor-pointer shrink-0"
+                      >
+                        <Sliders className="w-3.5 h-3.5" />
+                        <span>{t.manageGroups || 'Gestisci'} ({(db.instrumentGroups || []).length})</span>
+                      </button>
+                    </div>
+
+                    {(db.instrumentGroups || []).length > 0 && (
+                      <div className="flex flex-wrap gap-2 pt-1">
+                        {(db.instrumentGroups || []).map(g => (
+                          <div key={g.id} className="px-2.5 py-1 bg-slate-950/80 border border-slate-800 rounded-lg text-xs flex items-center gap-1.5 font-mono">
+                            <span className="font-bold text-slate-200">{g.name}</span>
+                            <span className="text-[10px] text-slate-500">({g.tickerSymbols.join(', ')})</span>
+                          </div>
+                        ))}
+                      </div>
+                    )}
                   </div>
                 </div>
               </div>
@@ -5598,6 +5898,47 @@ export default function App() {
 
       {/* Safety Deletion Confirmation Modal */}
       {renderDeletionConfirmModal()}
+
+      {/* Global Modals for Transaction and Transfer */}
+      <TransactionModal
+        isOpen={txForm.open}
+        onClose={() => setTxForm({ open: false, editId: null, portfolioId: '', date: '', type: TransactionType.BUY, symbol: '', qty: '', price: '', commission: '', currency: 'EUR', commissionCurrency: 'EUR', notes: '' })}
+        txForm={txForm}
+        setTxForm={setTxForm}
+        onSave={saveTransactionMutation}
+        formErr={formErr}
+        db={db}
+        t={t}
+        activeCurrencies={activeCurrencies}
+        lang={lang}
+      />
+
+      <TransferModal
+        isOpen={transferForm.open}
+        onClose={() => setTransferForm({ open: false, editTransferId: null, sourcePortfolioId: '', destPortfolioId: '', symbol: '', qty: '', price: '', priceCurrency: 'EUR', sourceCommission: '', sourceCommissionCurrency: 'EUR', sourceCommissionPaymentMode: 'EXTERNAL', destCommission: '', destCommissionCurrency: 'EUR', destCommissionPaymentMode: 'EXTERNAL', date: new Date().toISOString().substring(0, 16), criteria: 'FIFO', notes: '' })}
+        transferForm={transferForm}
+        setTransferForm={setTransferForm}
+        onSave={saveTransferMutation}
+        formErr={formErr}
+        db={db}
+        t={t}
+        activeCurrencies={activeCurrencies}
+        getAvailableTickersForSource={getAvailableTickersForSource}
+        getAvailableLots={getAvailableLots}
+        formatFullQuantity={formatFullQuantity}
+        lang={lang}
+      />
+
+      <InstrumentGroupsModal
+        isOpen={isGroupsModalOpen}
+        onClose={() => setIsGroupsModalOpen(false)}
+        t={t}
+        lang={lang}
+        groups={db.instrumentGroups || []}
+        allTransactions={db.transactions}
+        onSaveGroup={handleSaveInstrumentGroup}
+        onDeleteGroup={handleDeleteInstrumentGroup}
+      />
     </div>
   );
 }

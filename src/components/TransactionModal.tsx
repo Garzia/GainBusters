@@ -1,6 +1,7 @@
 import React, { useState } from 'react';
 import { X, Coins, HelpCircle, BookOpen } from 'lucide-react';
 import { DBState, TransactionType, TranslationDictionary } from '../types';
+import { cleanFloatNoise } from '../utils/finance';
 import { TickerInput } from './TickerInput';
 import { ModalPortal } from './ModalPortal';
 
@@ -119,7 +120,7 @@ export const TransactionModal: React.FC<TransactionModalProps> = ({
 
           <div className="space-y-1.5">
             <label className="text-slate-400 font-semibold">{t.transactionTypeLabel}</label>
-            <div className="grid grid-cols-2 gap-1 bg-slate-950 p-1 border border-slate-800 rounded-xl">
+            <div className="grid grid-cols-3 gap-1 bg-slate-950 p-1 border border-slate-800 rounded-xl">
               <button
                 type="button"
                 onClick={() => setTxForm({ ...txForm, type: TransactionType.BUY })}
@@ -137,6 +138,15 @@ export const TransactionModal: React.FC<TransactionModalProps> = ({
                 }`}
               >
                 {t.sellBtn}
+              </button>
+              <button
+                type="button"
+                onClick={() => setTxForm({ ...txForm, type: TransactionType.DIVIDEND, qty: txForm.qty || '1' })}
+                className={`py-1.5 rounded-lg font-bold text-xs transition duration-300 cursor-pointer ${
+                  txForm.type === TransactionType.DIVIDEND ? 'bg-cyan-600 text-white shadow-md' : 'text-slate-400 hover:text-white'
+                }`}
+              >
+                {t.dividendLabel || 'DIVIDEND'}
               </button>
             </div>
           </div>
@@ -265,11 +275,16 @@ export const TransactionModal: React.FC<TransactionModalProps> = ({
           )}
 
           <div className="space-y-1.5">
-            <label className="text-slate-400 font-semibold">{t.qtyLabel}</label>
+            <label className="text-slate-400 font-semibold">
+              {txForm.type === TransactionType.DIVIDEND 
+                ? (t.allOption === 'Tutti' ? 'N. Azioni / Quote (o 1 per importo fisso)' : 'Shares / Quantity (or 1 for flat amount)') 
+                : t.qtyLabel}
+            </label>
             <input
               type="number"
               step="any"
               value={txForm.qty ?? ''}
+              placeholder={txForm.type === TransactionType.DIVIDEND ? '1' : ''}
               onChange={(e) => setTxForm({ ...txForm, qty: e.target.value })}
               className="bg-slate-950/80 border border-slate-800 focus:outline-none focus:ring-2 focus:ring-emerald-500/20 focus:border-emerald-500/80 px-3 py-2 text-white rounded-xl w-full font-mono transition-all duration-300"
             />
@@ -277,7 +292,11 @@ export const TransactionModal: React.FC<TransactionModalProps> = ({
 
           <div className="grid grid-cols-3 gap-2">
             <div className="col-span-2 space-y-1.5">
-              <label className="text-slate-400 font-semibold">{t.priceLabel}</label>
+              <label className="text-slate-400 font-semibold">
+                {txForm.type === TransactionType.DIVIDEND 
+                  ? (t.dividendPerShareLabel || (t.allOption === 'Tutti' ? 'Dividendo per Azione / Importo' : 'Dividend per Share / Amount')) 
+                  : t.priceLabel}
+              </label>
               <input
                 type="number"
                 step="any"
@@ -302,7 +321,9 @@ export const TransactionModal: React.FC<TransactionModalProps> = ({
 
           <div className="grid grid-cols-3 gap-2">
             <div className="col-span-2 space-y-1.5">
-              <label className="text-slate-400 font-semibold">{t.commissionLabel}</label>
+              <label className="text-slate-400 font-semibold">
+                {txForm.type === TransactionType.DIVIDEND ? (t.withholdingTax || 'Ritenuta / Spese') : t.commissionLabel}
+              </label>
               <input
                 type="number"
                 step="any"
@@ -324,6 +345,25 @@ export const TransactionModal: React.FC<TransactionModalProps> = ({
               </select>
             </div>
           </div>
+
+          {txForm.type === TransactionType.DIVIDEND && (
+            <div className="md:col-span-2 bg-cyan-950/20 border border-cyan-500/25 rounded-xl p-3 flex flex-col sm:flex-row sm:items-center justify-between gap-2 text-xs">
+              <span className="text-slate-300 font-medium">
+                {t.grossDividend || 'Dividendo Lordo'}:
+                <strong className="text-cyan-300 font-bold font-mono ml-1.5 text-sm">
+                  {cleanFloatNoise((Number(txForm.qty) > 0 ? Number(txForm.qty) : 1) * (Number(txForm.price) || 0)).toFixed(2)} {txForm.currency}
+                </strong>
+              </span>
+              {Number(txForm.commission) > 0 && (
+                <span className="text-slate-400">
+                  {t.netDividend || 'Netto'}:
+                  <strong className="text-emerald-400 font-bold font-mono ml-1.5 text-sm">
+                    {cleanFloatNoise(Math.max(0, ((Number(txForm.qty) > 0 ? Number(txForm.qty) : 1) * (Number(txForm.price) || 0)) - Number(txForm.commission))).toFixed(2)} {txForm.currency}
+                  </strong>
+                </span>
+              )}
+            </div>
+          )}
 
           <div className="space-y-1.5 md:col-span-2">
             <label className="text-slate-400 font-semibold">{t.notesLabel}</label>

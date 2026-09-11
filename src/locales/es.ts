@@ -521,5 +521,27 @@ GainBusters se ha diseñado como una **aplicación 100% autohospedada, primero f
   infoPmc: 'Info PMC',
   pmcFullTitle: 'Precio Medio de Compra (PMC)',
   createFirstTransfer: 'Registra el primer traslado entre carteras',
-  transfersCountLabel: 'traslados registrados'
+  transfersCountLabel: 'traslados registrados',
+
+  // Dividend keys
+  dividendsTab: 'Dividendos',
+  dividendsTitle: 'Resumen de Dividendos',
+  dividendsDesc: 'Resumen de los dividendos totales recibidos por cartera, fechas de pago e historial de cobros.',
+  dividendLabel: 'DIVIDENDO',
+  totalDividendsReceived: 'Total Dividendos Recibidos',
+  dividendsPerPortfolio: 'Dividendos por Cartera',
+  historicalPaymentDates: 'Historial de Fechas de Pago',
+  paymentDate: 'Fecha de Pago',
+  grossDividend: 'Dividendo Bruto',
+  withholdingTax: 'Retención / Comisiones',
+  netDividend: 'Dividendo Neto',
+  registerDividendBtn: 'Registrar Dividendo',
+  noDividendsRecorded: 'Aún no hay dividendos registrados.',
+  noDividendsMatchingCriteria: 'Ningún dividendo coincide con los filtros aplicados.',
+  dividendPaymentsCount: 'Pagos',
+  latestPaymentDate: 'Último Pago',
+  allPortfoliosOption: 'Todas las Carteras',
+  dividendPerShareLabel: 'Dividendo / Acción',
+  topDividendPayerLabel: 'Mayor Pagador',
+  viewDividendsTooltip: 'Ver historial de dividendos de esta cartera'
 };

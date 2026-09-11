@@ -104,6 +104,7 @@ const initialDB = {
   transactions: [],
   transfers: [],
   otherCosts: [],
+  instrumentGroups: [],
   priceCache: {}
 };
 
@@ -136,6 +137,7 @@ function readDB() {
         transactions: Array.isArray(data.transactions) ? data.transactions : [],
         transfers: Array.isArray(data.transfers) ? data.transfers : [],
         otherCosts: Array.isArray(data.otherCosts) ? data.otherCosts : [],
+        instrumentGroups: Array.isArray(data.instrumentGroups) ? data.instrumentGroups : [],
         priceCache: (data.priceCache && typeof data.priceCache === 'object') ? data.priceCache : {}
       };
       memoryDB = result;
@@ -156,7 +158,12 @@ function writeDB(data: any) {
     }
     const tempFile = DB_FILE + '.tmp';
     fs.writeFileSync(tempFile, JSON.stringify(data, null, 2), 'utf-8');
-    fs.renameSync(tempFile, DB_FILE);
+    try {
+      fs.renameSync(tempFile, DB_FILE);
+    } catch (renameErr) {
+      fs.writeFileSync(DB_FILE, JSON.stringify(data, null, 2), 'utf-8');
+      try { fs.unlinkSync(tempFile); } catch (_) {}
+    }
   } catch (error) {
     console.error('Error writing database to disk:', error);
   }
@@ -264,9 +271,9 @@ app.post('/api/db', (req, res) => {
   const mergedSettings = {
     ...currentDb.settings,
     ...(newDb.settings || {}),
-    passwordHash: (newDb.settings?.passwordHash !== undefined) ? newDb.settings.passwordHash : passwordHash
+    passwordHash: passwordHash || currentDb.settings?.passwordHash
   };
-  if (mergedSettings.passwordHash && typeof mergedSettings.passwordHash === 'string' && mergedSettings.passwordHash.length > 0) {
+  if (currentDb.settings?.passwordSet || (mergedSettings.passwordHash && typeof mergedSettings.passwordHash === 'string' && mergedSettings.passwordHash.length > 0)) {
     mergedSettings.passwordSet = true;
   }
   const fullDb = {
@@ -276,6 +283,7 @@ app.post('/api/db', (req, res) => {
     transactions: Array.isArray(newDb.transactions) ? newDb.transactions : (currentDb.transactions || []),
     transfers: Array.isArray(newDb.transfers) ? newDb.transfers : (currentDb.transfers || []),
     otherCosts: Array.isArray(newDb.otherCosts) ? newDb.otherCosts : (currentDb.otherCosts || []),
+    instrumentGroups: Array.isArray(newDb.instrumentGroups) ? newDb.instrumentGroups : (currentDb.instrumentGroups || []),
     priceCache: (newDb.priceCache && typeof newDb.priceCache === 'object') ? newDb.priceCache : (currentDb.priceCache || {})
   };
   writeDB(fullDb);
@@ -283,7 +291,7 @@ app.post('/api/db', (req, res) => {
 });
 
 app.post('/api/db/settings', (req, res) => {
-  const { theme, defaultCurrency, selectedInflationId, inflationIndices, activeCurrencies, targetWeights } = req.body;
+  const { theme, defaultCurrency, selectedInflationId, inflationIndices, activeCurrencies, targetWeights, aggregateInstrumentsView } = req.body;
   const db = readDB();
   if (theme !== undefined) db.settings.theme = theme;
   if (defaultCurrency !== undefined) db.settings.defaultCurrency = defaultCurrency;
@@ -291,6 +299,7 @@ app.post('/api/db/settings', (req, res) => {
   if (inflationIndices !== undefined) db.settings.inflationIndices = inflationIndices;
   if (activeCurrencies !== undefined) db.settings.activeCurrencies = activeCurrencies;
   if (targetWeights !== undefined) db.settings.targetWeights = targetWeights;
+  if (aggregateInstrumentsView !== undefined) db.settings.aggregateInstrumentsView = aggregateInstrumentsView;
   writeDB(db);
   res.json({ success: true });
 });
@@ -346,6 +355,17 @@ app.post('/api/db/otherCosts', (req, res) => {
   }
   const db = readDB();
   db.otherCosts = otherCosts;
+  writeDB(db);
+  res.json({ success: true });
+});
+
+app.post('/api/db/instrumentGroups', (req, res) => {
+  const { instrumentGroups } = req.body;
+  if (!Array.isArray(instrumentGroups)) {
+    return res.status(400).json({ error: 'Invalid instrumentGroups list.' });
+  }
+  const db = readDB();
+  db.instrumentGroups = instrumentGroups;
   writeDB(db);
   res.json({ success: true });
 });

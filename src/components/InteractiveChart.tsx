@@ -5,7 +5,7 @@
 
 import React, { useState, useMemo } from 'react';
 import { LanguagePhrases, Currency, Transaction } from '../types.ts';
-import { LineChart, Calendar, RefreshCw, BarChart2, CheckCircle2, AlertTriangle, Activity, TrendingUp, TrendingDown, Percent } from 'lucide-react';
+import { LineChart, Calendar, RefreshCw, BarChart2, CheckCircle2, AlertTriangle, Activity, TrendingUp, TrendingDown, Percent, Layers, Sliders } from 'lucide-react';
 import { TickerInput } from './TickerInput.tsx';
 import { formatDateString } from '../utils.ts';
 import { calculatePortfolioPerformance } from '../utils/finance.ts';
@@ -17,6 +17,17 @@ export interface DailyBalance {
   currentValue: number;
   realValueAdjusted: number; // Adjusted for inflation relative to today
   benchmarkValue?: number; // Normalized benchmark starting at same initial portfolio value!
+}
+
+export interface AssetAllocationItem {
+  symbol: string;
+  value: number;
+  weight: number;
+  target: number;
+  isGroup?: boolean;
+  groupId?: string;
+  constituentSymbols?: string[];
+  constituents?: { symbol: string; value: number; weight: number; weightInGroup: number }[];
 }
 
 interface InteractiveChartProps {
@@ -32,20 +43,25 @@ interface InteractiveChartProps {
   setActiveBenchmark: (id: string) => void;
   inflationToggle: boolean;
   setInflationToggle: (v: boolean) => void;
-  assetAllocation: { symbol: string; value: number; weight: number; target: number }[];
+  assetAllocation: AssetAllocationItem[];
   onUpdateTargetWeight: (symbol: string, val: number) => void;
   onSelectTicker?: (sym: string) => void;
   activeTxSorted?: any[];
   activeOtherCosts?: any[];
   allTransactions?: Transaction[];
   activePortIds?: string[];
-  targetSymbol?: string | null;
+  targetSymbol?: string | string[] | null;
   convertValue?: (val: number, from: string, to: string, date: string) => number;
   selectedCurrency?: string;
   inflationIndices?: any[];
   selectedInflationId?: string;
   onSelectInflationId?: (id: string) => void;
   positionsTableNode?: React.ReactNode;
+  isAggregatedView?: boolean;
+  onToggleAggregatedView?: () => void;
+  onOpenGroupsManager?: () => void;
+  onSelectGroup?: (groupId: string) => void;
+  instrumentGroupsCount?: number;
 }
 
 export default function InteractiveChart({
@@ -74,7 +90,12 @@ export default function InteractiveChart({
   inflationIndices = [],
   selectedInflationId = '',
   onSelectInflationId,
-  positionsTableNode
+  positionsTableNode,
+  isAggregatedView = false,
+  onToggleAggregatedView,
+  onOpenGroupsManager,
+  onSelectGroup,
+  instrumentGroupsCount = 0
 }: InteractiveChartProps) {
   const [timeframe, setTimeframe] = useState<string>('ALL');
   const [customStartDate, setCustomStartDate] = useState<string>('');
@@ -877,21 +898,57 @@ export default function InteractiveChart({
 
       {/* Tickers breakdown and weight rebalancing */}
       <div className="bg-slate-900/50 p-6 rounded-2xl border border-slate-800 space-y-4">
-        <div className="border-b border-slate-800 pb-3 flex items-center justify-between">
+        <div className="border-b border-slate-800 pb-3 flex flex-wrap items-center justify-between gap-3">
           <div className="flex items-center gap-2">
             <BarChart2 className="w-5 h-5 text-green-500" />
             <h3 className="text-lg font-bold text-white">{t.assetsAndRebalancingTitle}</h3>
           </div>
-          {sumTargetWeights !== 100 && sumTargetWeights > 0 && (
-            <span className="text-xs text-orange-400 font-mono flex items-center gap-1">
-              <AlertTriangle className="w-3.5 h-3.5" /> {t.targetWeightingSumNotice.replace('{sum}', sumTargetWeights.toString())}
-            </span>
-          )}
-          {sumTargetWeights === 100 && (
-            <span className="text-xs text-green-400 font-mono flex items-center gap-1">
-              <CheckCircle2 className="w-3.5 h-3.5" /> {t.targetOk}
-            </span>
-          )}
+
+          <div className="flex flex-wrap items-center gap-2">
+            {onToggleAggregatedView && (
+              <button
+                type="button"
+                onClick={onToggleAggregatedView}
+                className={`px-2.5 py-1 rounded-lg border text-xs font-semibold flex items-center gap-1.5 transition-all cursor-pointer select-none ${
+                  isAggregatedView
+                    ? 'bg-emerald-500/20 text-emerald-300 border-emerald-500/40 shadow-sm'
+                    : 'bg-slate-950/80 text-slate-400 border-slate-800 hover:text-white hover:bg-slate-900'
+                }`}
+                title={isAggregatedView ? 'Visualizzazione aggregata attiva' : 'Visualizza allocazione per strumento aggregato'}
+              >
+                <Layers className={`w-3.5 h-3.5 ${isAggregatedView ? 'text-emerald-400' : 'text-slate-400'}`} />
+                <span>{isAggregatedView ? (t.aggregatedModeShort || 'Aggregati') : (t.standardModeShort || 'Singoli')}</span>
+              </button>
+            )}
+
+            {onOpenGroupsManager && (
+              <button
+                type="button"
+                onClick={onOpenGroupsManager}
+                className="px-2.5 py-1 rounded-lg bg-slate-950 border border-slate-800 text-slate-300 hover:text-white hover:bg-slate-800 transition-colors text-xs font-medium flex items-center gap-1 cursor-pointer"
+                title="Gestisci strumenti multi-borsa"
+              >
+                <Sliders className="w-3.5 h-3.5 text-emerald-400" />
+                <span className="hidden sm:inline">{t.manageGroupsBtn || 'Gruppi'}</span>
+                {instrumentGroupsCount > 0 && (
+                  <span className="px-1.5 py-0.2 rounded-full bg-slate-800 text-emerald-400 text-[10px] font-bold">
+                    {instrumentGroupsCount}
+                  </span>
+                )}
+              </button>
+            )}
+
+            {sumTargetWeights !== 100 && sumTargetWeights > 0 && (
+              <span className="text-xs text-orange-400 font-mono flex items-center gap-1 ml-2">
+                <AlertTriangle className="w-3.5 h-3.5" /> {t.targetWeightingSumNotice.replace('{sum}', sumTargetWeights.toString())}
+              </span>
+            )}
+            {sumTargetWeights === 100 && (
+              <span className="text-xs text-green-400 font-mono flex items-center gap-1 ml-2">
+                <CheckCircle2 className="w-3.5 h-3.5" /> {t.targetOk}
+              </span>
+            )}
+          </div>
         </div>
 
         {assetAllocation.length > 0 ? (
@@ -908,17 +965,41 @@ export default function InteractiveChart({
                 return (
                   <div key={asset.symbol} className="bg-slate-950 p-4 rounded-xl border border-slate-800 space-y-3">
                     <div className="flex justify-between items-start">
-                      <div>
-                        <span 
-                          onClick={() => onSelectTicker?.(asset.symbol)}
-                          className={`text-sm font-bold text-white block uppercase tracking-wider ${onSelectTicker ? 'cursor-pointer hover:text-emerald-400 transition-colors duration-200' : ''}`}
-                          title={t.clickAnalyzeTickerTooltip}
-                        >
-                          {asset.symbol}
-                        </span>
-                        <span className="text-xs text-slate-500 font-mono">Valore: {asset.value.toLocaleString(undefined, { minimumFractionDigits: 2 })} {currencySymbol}</span>
+                      <div className="space-y-1">
+                        <div className="flex items-center gap-1.5 flex-wrap">
+                          <span 
+                            onClick={() => {
+                              if (asset.isGroup && asset.groupId && onSelectGroup) {
+                                onSelectGroup(asset.groupId);
+                              } else if (onSelectTicker) {
+                                onSelectTicker(asset.symbol);
+                              }
+                            }}
+                            className={`text-sm font-bold text-white block uppercase tracking-wider ${onSelectTicker || onSelectGroup ? 'cursor-pointer hover:text-emerald-400 transition-colors duration-200' : ''}`}
+                            title={asset.isGroup ? `Filtra per gruppo ${asset.symbol}` : t.clickAnalyzeTickerTooltip}
+                          >
+                            {asset.symbol}
+                          </span>
+                          {asset.isGroup && (
+                            <span className="text-[9px] bg-emerald-500/15 text-emerald-300 border border-emerald-500/30 px-1.5 py-0.2 rounded font-semibold uppercase">
+                              {t.aggregatedBadge || 'Aggregato'}
+                            </span>
+                          )}
+                        </div>
+
+                        {asset.isGroup && asset.constituentSymbols && asset.constituentSymbols.length > 0 && (
+                          <div className="flex flex-wrap gap-1 items-center">
+                            {asset.constituentSymbols.map(sym => (
+                              <span key={sym} className="px-1.5 py-0.2 rounded bg-slate-900 border border-slate-800 text-sky-400 font-mono text-[9px] font-semibold">
+                                {sym}
+                              </span>
+                            ))}
+                          </div>
+                        )}
+
+                        <span className="text-xs text-slate-500 font-mono block">Valore: {asset.value.toLocaleString(undefined, { minimumFractionDigits: 2 })} {currencySymbol}</span>
                       </div>
-                      <span className={`text-xs px-2 py-0.5 rounded-full font-semibold ${
+                      <span className={`text-xs px-2 py-0.5 rounded-full font-semibold shrink-0 ${
                         rebalanceAction === t.statusInTarget 
                           ? 'bg-green-500/10 text-green-400 border border-green-500/20' 
                           : rebalanceAction === t.statusBuyMore
@@ -956,9 +1037,19 @@ export default function InteractiveChart({
                             type="number"
                             min="0"
                             max="100"
-                            value={asset.target || 0}
-                            onChange={(e) => onUpdateTargetWeight(asset.symbol, Math.min(100, Math.max(0, Number(e.target.value))))}
-                            className="bg-slate-900 border border-slate-800 text-white rounded text-center text-xs py-0.5 w-full font-mono outline-none"
+                            step="any"
+                            value={asset.target === 0 || asset.target === undefined ? '' : asset.target}
+                            placeholder="0"
+                            onChange={(e) => {
+                              const raw = e.target.value;
+                              if (raw === '') {
+                                onUpdateTargetWeight(asset.symbol, 0);
+                              } else {
+                                const num = parseFloat(raw);
+                                onUpdateTargetWeight(asset.symbol, isNaN(num) ? 0 : Math.min(100, Math.max(0, num)));
+                              }
+                            }}
+                            className="bg-slate-900 border border-slate-800 text-white rounded text-center text-xs py-0.5 w-full font-mono outline-none focus:border-emerald-500/50"
                           />
                         </div>
                       </div>
