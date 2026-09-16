@@ -423,6 +423,95 @@ assert.strictEqual(totalsWithAssetComm.assetCommissions[0].fiatValue, 30);
 assert.strictEqual(totalsWithAssetComm.assetCommissions[0].impliedRate, 60000);
 console.log('✓ Commissioni in asset scorporate e totalizzate con controvalore e tasso di cambio corretto');
 
+// 9. VERIFICA MOTORE ATTIVITÀ SENZA TICKER (FONDI PENSIONE, LIQUIDITÀ REMUNERATA, RENDIMENTI E TASSE)
+console.log('\n9. Verifica motore finanziario per attività e investimenti senza ticker...');
+import { calculateNonTickerMetrics, solveMWRR, calculateTWRR } from '../utils/nonTickerFinance';
+import { NonTickerEntity, NonTickerMovement, NonTickerMovementType } from '../types';
+
+const testPensionFund: NonTickerEntity = {
+  id: 'ent-pension-1',
+  name: 'Fondo Pensione Cometa',
+  category: 'PENSION_FUND',
+  currency: 'EUR',
+  identifier: 'POS-12345',
+  createdAt: '2024-01-01'
+};
+
+const testPensionMovements: NonTickerMovement[] = [
+  // Anno 1: versamenti dipendente, datore, TFR
+  { id: 'm1', entityId: 'ent-pension-1', date: '2024-01-15', type: NonTickerMovementType.EMPLOYEE_CONTRIBUTION, amount: 100 },
+  { id: 'm2', entityId: 'ent-pension-1', date: '2024-01-15', type: NonTickerMovementType.EMPLOYER_CONTRIBUTION, amount: 150 },
+  { id: 'm3', entityId: 'ent-pension-1', date: '2024-01-15', type: NonTickerMovementType.TFR, amount: 250 },
+  // Rendimento accreditato a metà anno con tasse
+  { id: 'm4', entityId: 'ent-pension-1', date: '2024-06-30', type: NonTickerMovementType.RETURN, grossReturn: 50, taxAmount: 10, netReturn: 40, isReinvested: true },
+  // Rilevazione NAV fine anno 1
+  { id: 'm5', entityId: 'ent-pension-1', date: '2024-12-31', type: NonTickerMovementType.VALUATION, valuation: 580 },
+  // Anno 2: nuovo versamento
+  { id: 'm6', entityId: 'ent-pension-1', date: '2025-01-15', type: NonTickerMovementType.DEPOSIT, amount: 500 },
+  // Rilevazione NAV fine anno 2
+  { id: 'm7', entityId: 'ent-pension-1', date: '2025-12-31', type: NonTickerMovementType.VALUATION, valuation: 1200 }
+];
+
+const pensionMetrics = calculateNonTickerMetrics('ent-pension-1', [testPensionFund], testPensionMovements, 'EUR');
+
+// Totale versamenti: 100 + 150 + 250 + 500 = 1000
+assert.strictEqual(pensionMetrics.totalInflows, 1000, 'Totale versamenti atteso: 1000 EUR');
+assert.strictEqual(pensionMetrics.employeeContrib, 100, 'Contributo dipendente atteso: 100 EUR');
+assert.strictEqual(pensionMetrics.employerContrib, 150, 'Contributo datore atteso: 150 EUR');
+assert.strictEqual(pensionMetrics.tfrContrib, 250, 'TFR atteso: 250 EUR');
+assert.strictEqual(pensionMetrics.voluntaryDeposit, 500, 'Versamento volontario atteso: 500 EUR');
+assert.strictEqual(pensionMetrics.totalGrossReturn, 50, 'Rendimento lordo atteso: 50 EUR');
+assert.strictEqual(pensionMetrics.totalTaxes, 10, 'Imposte attese: 10 EUR');
+assert.strictEqual(pensionMetrics.totalNetReturn, 40, 'Rendimento netto atteso: 40 EUR');
+assert.strictEqual(pensionMetrics.currentValue, 1200, 'Valore attuale atteso da ultima rilevazione: 1200 EUR');
+assert.strictEqual(pensionMetrics.netGain, 200, 'Guadagno netto atteso: 200 EUR (1200 - 1000)');
+assert.strictEqual(pensionMetrics.simpleReturnPct, 20, 'Rendimento semplice atteso: 20%');
+assert(pensionMetrics.mwrrAnnualized !== null && pensionMetrics.mwrrAnnualized > 0, 'MWRR deve essere calcolato e positivo');
+assert(pensionMetrics.twrrCumulative !== null && pensionMetrics.twrrCumulative > 0, 'TWRR cumulativo deve essere calcolato');
+console.log('✓ Motore finanziario senza ticker verificato con successo: flussi, imposte, rivalutazione, MWRR e TWRR corretti');
+
+// 10. VERIFICA GESTIONE QUOTE, PREZZO UNITARIO, COMMISSIONI E PERFORMANCE DI PERIODO
+console.log('\n10. Verifica quote, prezzo unitario, commissioni e performance di periodo per attività senza ticker...');
+import { calculateNonTickerPeriodMetrics } from '../utils/nonTickerFinance';
+
+const testUnitAssetMovements: NonTickerMovement[] = [
+  // Flusso 1: Acquisto 100 quote a 10 EUR con 5 EUR di commissioni
+  { id: 'u1', entityId: 'ent-unit-1', date: '2025-01-10', type: NonTickerMovementType.DEPOSIT, units: 100, unitPrice: 10, amount: 1000, fee: 5 },
+  // Flusso 2: Acquisto 50 quote a 12 EUR con 3 EUR di commissioni
+  { id: 'u2', entityId: 'ent-unit-1', date: '2025-06-10', type: NonTickerMovementType.DEPOSIT, units: 50, unitPrice: 12, amount: 600, fee: 3 },
+  // Rilevazione saldo finale: 150 quote con valore quota a 15 EUR -> saldo 2250 EUR
+  { id: 'u3', entityId: 'ent-unit-1', date: '2025-12-31', type: NonTickerMovementType.VALUATION, valuation: 2250, units: 150 }
+];
+
+const unitAssetEntity: NonTickerEntity = {
+  id: 'ent-unit-1',
+  name: 'Fondo Quote Test',
+  category: 'OTHER',
+  currency: 'EUR',
+  createdAt: '2025-01-01'
+};
+
+// Calcolo con commissioni incluse
+const metricsWithComm = calculateNonTickerMetrics('ent-unit-1', [unitAssetEntity], testUnitAssetMovements, 'EUR', undefined, true);
+assert.strictEqual(metricsWithComm.totalUnits, 150, 'Quote totali devono essere 150');
+assert.strictEqual(metricsWithComm.totalCommissions, 8, 'Commissioni totali devono essere 8 EUR (5 + 3)');
+assert.strictEqual(metricsWithComm.netInvestedNominal, 1600, 'Capitale nominale versato: 1600 EUR');
+assert.strictEqual(metricsWithComm.netInvestedWithCommissions, 1608, 'Capitale con commissioni: 1608 EUR');
+assert.strictEqual(metricsWithComm.netGain, 642, 'Guadagno netto con commissioni: 2250 - 1608 = 642 EUR');
+assert.strictEqual(metricsWithComm.currentUnitPrice, 15, 'Valore quota finale: 15 EUR');
+
+// Calcolo con commissioni escluse
+const metricsWithoutComm = calculateNonTickerMetrics('ent-unit-1', [unitAssetEntity], testUnitAssetMovements, 'EUR', undefined, false);
+assert.strictEqual(metricsWithoutComm.netGain, 650, 'Guadagno netto escludendo commissioni: 2250 - 1600 = 650 EUR');
+
+// Calcolo periodo 2025-05-01 / 2025-12-31
+const periodRes = calculateNonTickerPeriodMetrics(metricsWithComm, testUnitAssetMovements, '2025-05-01', '2025-12-31', 'CUSTOM', true);
+assert.strictEqual(periodRes.inflows, 600, 'Flussi in entrata periodo H2: 600 EUR');
+assert.strictEqual(periodRes.commissions, 3, 'Commissioni periodo H2: 3 EUR');
+assert.strictEqual(periodRes.startBalance, 1000, 'Saldo iniziale periodo: 1000 EUR');
+assert.strictEqual(periodRes.endBalance, 2250, 'Saldo finale periodo: 2250 EUR');
+console.log('✓ Quote, prezzo unitario, commissioni incluse/escluse e metriche di periodo validate con successo');
+
 console.log('\n======================================================');
 console.log(' TUTTI I TEST DELLA SUITE SONO STATI SUPERATI CON SUCCESSO!');
 console.log('======================================================');

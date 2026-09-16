@@ -105,6 +105,9 @@ const initialDB = {
   transfers: [],
   otherCosts: [],
   instrumentGroups: [],
+  nonTickerEntities: [],
+  nonTickerMovements: [],
+  nonTickerMovementTypes: [],
   priceCache: {}
 };
 
@@ -138,6 +141,9 @@ function readDB() {
         transfers: Array.isArray(data.transfers) ? data.transfers : [],
         otherCosts: Array.isArray(data.otherCosts) ? data.otherCosts : [],
         instrumentGroups: Array.isArray(data.instrumentGroups) ? data.instrumentGroups : [],
+        nonTickerEntities: Array.isArray(data.nonTickerEntities) ? data.nonTickerEntities : [],
+        nonTickerMovements: Array.isArray(data.nonTickerMovements) ? data.nonTickerMovements : [],
+        nonTickerMovementTypes: Array.isArray(data.nonTickerMovementTypes) ? data.nonTickerMovementTypes : [],
         priceCache: (data.priceCache && typeof data.priceCache === 'object') ? data.priceCache : {}
       };
       memoryDB = result;
@@ -284,6 +290,9 @@ app.post('/api/db', (req, res) => {
     transfers: Array.isArray(newDb.transfers) ? newDb.transfers : (currentDb.transfers || []),
     otherCosts: Array.isArray(newDb.otherCosts) ? newDb.otherCosts : (currentDb.otherCosts || []),
     instrumentGroups: Array.isArray(newDb.instrumentGroups) ? newDb.instrumentGroups : (currentDb.instrumentGroups || []),
+    nonTickerEntities: Array.isArray(newDb.nonTickerEntities) ? newDb.nonTickerEntities : (currentDb.nonTickerEntities || []),
+    nonTickerMovements: Array.isArray(newDb.nonTickerMovements) ? newDb.nonTickerMovements : (currentDb.nonTickerMovements || []),
+    nonTickerMovementTypes: Array.isArray(newDb.nonTickerMovementTypes) ? newDb.nonTickerMovementTypes : (currentDb.nonTickerMovementTypes || []),
     priceCache: (newDb.priceCache && typeof newDb.priceCache === 'object') ? newDb.priceCache : (currentDb.priceCache || {})
   };
   writeDB(fullDb);

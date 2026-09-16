@@ -105,6 +105,61 @@ export interface InstrumentGroup {
   notes?: string;
 }
 
+export enum NonTickerMovementType {
+  DEPOSIT = 'DEPOSIT',
+  EMPLOYEE_CONTRIBUTION = 'EMPLOYEE_CONTRIBUTION',
+  EMPLOYER_CONTRIBUTION = 'EMPLOYER_CONTRIBUTION',
+  TFR = 'TFR',
+  OTHER_INFLOW = 'OTHER_INFLOW',
+  WITHDRAWAL = 'WITHDRAWAL',
+  OTHER_OUTFLOW = 'OTHER_OUTFLOW',
+  RETURN = 'RETURN',
+  VALUATION = 'VALUATION'
+}
+
+export type NonTickerCategory =
+  | 'PENSION_FUND'
+  | 'SAVINGS_ACCOUNT'
+  | 'COMPANY_TFR'
+  | 'INSURANCE_POLICY'
+  | 'PRIVATE_INVESTMENT'
+  | 'OTHER';
+
+export interface NonTickerEntity {
+  id: string;
+  name: string;
+  category: NonTickerCategory;
+  currency: Currency | string;
+  identifier?: string;
+  notes?: string;
+  createdAt: string;
+}
+
+export interface NonTickerMovementTypeConfig {
+  id: string;
+  name: string;
+  direction: 'INFLOW' | 'OUTFLOW';
+  isDefault?: boolean;
+  order: number;
+}
+
+export interface NonTickerMovement {
+  id: string;
+  entityId: string;
+  date: string;
+  type: NonTickerMovementType | string;
+  amount?: number;
+  valuation?: number;
+  grossReturn?: number;
+  taxAmount?: number;
+  netReturn?: number;
+  isReinvested?: boolean;
+  units?: number;
+  unitPrice?: number;
+  fee?: number;
+  notes?: string;
+}
+
 export interface SystemSettings {
   theme: 'light' | 'dark' | 'system';
   defaultCurrency: Currency | string;
@@ -128,6 +183,9 @@ export interface DBState {
   transfers?: Transfer[];
   otherCosts?: OtherCost[];
   instrumentGroups?: InstrumentGroup[];
+  nonTickerEntities?: NonTickerEntity[];
+  nonTickerMovements?: NonTickerMovement[];
+  nonTickerMovementTypes?: NonTickerMovementTypeConfig[];
   priceCache: {
     // Ticker -> Date (YYYY-MM-DD) -> Price
     [ticker: string]: { [date: string]: number };
@@ -696,6 +754,261 @@ export interface LanguagePhrases {
   confirmDeleteGroup?: string;
   groupDetailsLabel?: string;
   weightInGroupLabel?: string;
+
+  // Non-Ticker Assets & Funds Keys
+  nonTickerTab?: string;
+  nonTickerTitle?: string;
+  nonTickerDesc?: string;
+  newEntityBtn?: string;
+  editEntityBtn?: string;
+  deleteEntityBtn?: string;
+  newMovementBtn?: string;
+  newValuationBtn?: string;
+  newReturnBtn?: string;
+  entityNameLabel?: string;
+  entityCategoryLabel?: string;
+  entityCurrencyLabel?: string;
+  entityIdentifierLabel?: string;
+  allEntitiesOption?: string;
+  selectEntityLabel?: string;
+  categoryPensionFund?: string;
+  categorySavingsAccount?: string;
+  categoryCompanyTfr?: string;
+  categoryInsurancePolicy?: string;
+  categoryPrivateInvestment?: string;
+  categoryOther?: string;
+  movementTypeLabel?: string;
+  mvDeposit?: string;
+  mvEmployeeContrib?: string;
+  mvEmployerContrib?: string;
+  mvTfr?: string;
+  mvOtherInflow?: string;
+  mvWithdrawal?: string;
+  mvOtherOutflow?: string;
+  mvReturn?: string;
+  mvValuation?: string;
+  grossReturnLabel?: string;
+  taxAmountLabel?: string;
+  netReturnLabel?: string;
+  isReinvestedLabel?: string;
+  reinvestedInBalance?: string;
+  paidOutExternal?: string;
+  valuationAmountLabel?: string;
+  movementAmountLabel?: string;
+  netInvestedCapital?: string;
+  currentTotalValue?: string;
+  totalNetGain?: string;
+  totalGrossReturns?: string;
+  totalTaxesPaid?: string;
+  totalNetReturns?: string;
+  totalInflows?: string;
+  totalOutflows?: string;
+  capitalEvolutionTitle?: string;
+  capitalEvolutionDesc?: string;
+  movementsHistoryTitle?: string;
+  noEntitiesConfigured?: string;
+  createFirstEntityPrompt?: string;
+  noMovementsRecorded?: string;
+  confirmDeleteEntity?: string;
+  confirmDeleteMovement?: string;
+  performanceSummaryTitle?: string;
+  twrrTitle?: string;
+  twrrTooltip?: string;
+  mwrrTitle?: string;
+  mwrrTooltip?: string;
+  simpleReturnTitle?: string;
+  annualizedShort?: string;
+  cumulativeShort?: string;
+  flowBreakdownTitle?: string;
+  employeeContribTotal?: string;
+  employerContribTotal?: string;
+  tfrContribTotal?: string;
+  voluntaryDepositTotal?: string;
+  withdrawalsTotal?: string;
+  lastValuationDate?: string;
+  filterTimeframeAll?: string;
+  filterTimeframe1Y?: string;
+  filterTimeframe3Y?: string;
+  filterTimeframe5Y?: string;
+  filterTimeframeYTD?: string;
+  editMovementBtn?: string;
+  effectiveTaxRate?: string;
+  summaryStatisticsTitle?: string;
+  unitsLabel?: string;
+  unitsOptional?: string;
+  totalUnits?: string;
+  navPerUnit?: string;
+  averageUnitCost?: string;
+  impliedUnitPrice?: string;
+  unitsPresent?: string;
+  categoryFilterLabel?: string;
+  singleAssetFilterLabel?: string;
+  selectCategoryLabel?: string;
+  allCategories?: string;
+  consolidatedView?: string;
+  manageMovementTypes?: string;
+  manageMovementTypesDesc?: string;
+  inflowsGroup?: string;
+  outflowsGroup?: string;
+  newTypeNamePlaceholder?: string;
+  addTypeBtn?: string;
+  moveUp?: string;
+  moveDown?: string;
+  resetDefaultTypes?: string;
+  noFlowsRecorded?: string;
+  movementUnitsLabel?: string;
+  unitPriceLabel?: string;
+  movementFeeLabel?: string;
+  optionalLabel?: string;
+  periodGrossReturns?: string;
+  periodTaxes?: string;
+  periodNetReturns?: string;
+  periodFlowBreakdown?: string;
+  periodTaxAnalysis?: string;
+  trendCapitalTitle?: string;
+  periodInvestedCapital?: string;
+  periodNetGain?: string;
+  periodNetGainLabel?: string;
+  periodNetInvestedLabel?: string;
+  periodCommissionsLabel?: string;
+  periodGrossReturnsLabel?: string;
+  periodTaxesLabel?: string;
+  periodNetReturnsLabel?: string;
+  periodTwrrLabel?: string;
+  periodMwrrLabel?: string;
+  periodEndValue?: string;
+  totalCommissionsLabel?: string;
+  includeCommissionsToggle?: string;
+  includeCommissionsBtn?: string;
+  excludeCommissionsBtn?: string;
+  periodPerformanceTitle?: string;
+  periodStartBalanceLabel?: string;
+  periodEndBalanceLabel?: string;
+  customDateRangeLabel?: string;
+  entitySingular?: string;
+  entitiesPlural?: string;
+  singleEntityOption?: string;
+  selectEntityAndFund?: string;
+  addFirstEntityBtn?: string;
+  cashFlowsOnly?: string;
+  commissionsShort?: string;
+  includedInInvestedCapital?: string;
+  excludedFromInvestedCapital?: string;
+  insufficientData?: string;
+  irrShort?: string;
+  totalUnitsLabel?: string;
+  navPerUnitLabel?: string;
+  unitShort?: string;
+  positionCalculatedInUnits?: string;
+  grossReturnsLabel?: string;
+  taxesLabel?: string;
+  netReturnsLabel?: string;
+  averageTaxRate?: string;
+  includedBadge?: string;
+  excludedBadge?: string;
+  commissionsExternalDesc?: string;
+  newValuationTooltip?: string;
+  newReturnTooltip?: string;
+  manageMovementTypesTooltip?: string;
+  movementTypesShort?: string;
+  noTimelineData?: string;
+  investedPrefix?: string;
+  balancePrefix?: string;
+  gainPrefix?: string;
+  unitsPrefix?: string;
+  chartHoverInstruction?: string;
+  periodIrrLabel?: string;
+  externalCostsLabel?: string;
+  grossLabel?: string;
+  taxesPrefix?: string;
+  selectedPeriodLabel?: string;
+  noFlowsInPeriod?: string;
+  inflowsAndDepositsTitle?: string;
+  unitsShort?: string;
+  outflowsAndWithdrawalsTitle?: string;
+  netShort?: string;
+  allMovementTypes?: string;
+  capitalFlowsFilter?: string;
+  valuationSnapshotsFilter?: string;
+  returnsFilter?: string;
+  entityColumn?: string;
+  movementTypeColumn?: string;
+  amountOrValuationColumn?: string;
+  unitsColumn?: string;
+  detailsAndTaxColumn?: string;
+  liquidatedBadge?: string;
+  navPrefix?: string;
+  bankStatementSnapshot?: string;
+  feePrefix?: string;
+  capitalFlowBadge?: string;
+  deleteLabel?: string;
+  noMovementsFound?: string;
+  entityNamePlaceholder?: string;
+  entityIdentifierPlaceholder?: string;
+  entityNotesPlaceholder?: string;
+  flowTab?: string;
+  balanceNavTab?: string;
+  returnTab?: string;
+  manageMovementTypesLink?: string;
+  optionalShort?: string;
+  valuationExplanation?: string;
+  grossMinusTaxes?: string;
+  assignedUnitsLabel?: string;
+  reinvestedInBalanceDesc?: string;
+  movementNotesPlaceholder?: string;
+  saveMovementBtn?: string;
+  manageMovementTypesTitle?: string;
+  manageMovementTypesSubtitle?: string;
+  defineNewTypeTitle?: string;
+  inflowOption?: string;
+  outflowOption?: string;
+  inflowsCountLabel?: string;
+  outflowsCountLabel?: string;
+  deleteCustomTypeTooltip?: string;
+  cannotDeleteUsedTypeAlert?: string;
+  confirmDeleteEntityTitle?: string;
+  confirmDeleteMovementTitle?: string;
+  deleteEntityWarning?: string;
+  deleteMovementWarning?: string;
+  confirmPermanentDelete?: string;
+  daysLabel?: string;
+
+  // Additional Non-Ticker translations
+  tabCapitalFlow?: string;
+  tabValuation?: string;
+  tabReturn?: string;
+  manageCustomTypesBtn?: string;
+  optionalBadge?: string;
+  externalCost?: string;
+  notesOrReferenceLabel?: string;
+  notesOrDetailsLabel?: string;
+  operationDateLabel?: string;
+  valuationHelperText?: string;
+  balanceLabel?: string;
+  gainShort?: string;
+  hoverPointsHint?: string;
+  dateColumn?: string;
+  operationTypeColumn?: string;
+  amountValueColumn?: string;
+  detailsTaxColumn?: string;
+  notesColumn?: string;
+  actionsColumn?: string;
+  netLabel?: string;
+  allTypesFilter?: string;
+  valuationRecordsFilter?: string;
+  deleteMovementBtn?: string;
+  restoreDefaultsBtn?: string;
+  deleteCustomTypeTitle?: string;
+  inflowStreamsLabel?: string;
+  outflowStreamsLabel?: string;
+  inflowBadge?: string;
+  outflowBadge?: string;
+  typeNamePlaceholder?: string;
+  confirmPermanentDeleteBtn?: string;
+  noChartDataWarning?: string;
+  statementValuationShort?: string;
+  capitalFlowShort?: string;
+  investedShort?: string;
 }
 
 export interface TranslationDictionary {

@@ -5,7 +5,7 @@
 
 import React, { useState, useEffect, useRef, useMemo, useCallback } from 'react';
 import { translations } from './locales/index.ts';
-import { Currency, DBState, Account, Portfolio, Transaction, TransactionType, Transfer, InstrumentGroup } from './types.ts';
+import { Currency, DBState, Account, Portfolio, Transaction, TransactionType, Transfer, InstrumentGroup, NonTickerEntity, NonTickerMovement } from './types.ts';
 import { encryptData, decryptData } from './utils/crypto.ts';
 import { saveFileHandleInIndexedDB, getFileHandleFromIndexedDB, clearFileHandleFromIndexedDB, getDatabaseStateFromIndexedDB } from './utils/indexedDB.ts';
 import { storageService } from './services/storageService.ts';
@@ -14,6 +14,7 @@ import MissionPage from './components/MissionPage.tsx';
 import ToolsPage from './components/ToolsPage.tsx';
 import OtherCostsPage from './components/OtherCostsPage.tsx';
 import { DividendsPage } from './components/DividendsPage.tsx';
+import { NonTickerAssetsPage } from './components/NonTickerAssetsPage.tsx';
 import { InflationPage } from './components/InflationPage.tsx';
 import InteractiveChart, { DailyBalance } from './components/InteractiveChart.tsx';
 import { PositionsTable } from './components/PositionsTable.tsx';
@@ -75,7 +76,8 @@ import {
   ChevronLeft,
   ChevronRight,
   Layers,
-  Sliders
+  Sliders,
+  Landmark
 } from 'lucide-react';
 
 const defaultInitialDB: DBState = {
@@ -138,6 +140,9 @@ const defaultInitialDB: DBState = {
   transfers: [],
   otherCosts: [],
   instrumentGroups: [],
+  nonTickerEntities: [],
+  nonTickerMovements: [],
+  nonTickerMovementTypes: [],
   priceCache: {}
 };
 
@@ -201,6 +206,10 @@ export default function App() {
     transactions: [],
     transfers: [],
     otherCosts: [],
+    instrumentGroups: [],
+    nonTickerEntities: [],
+    nonTickerMovements: [],
+    nonTickerMovementTypes: [],
     priceCache: {}
   });
 
@@ -1089,6 +1098,9 @@ export default function App() {
           transfers: Array.isArray(loadedDb.transfers) ? loadedDb.transfers : [],
           otherCosts: Array.isArray(loadedDb.otherCosts) ? loadedDb.otherCosts : [],
           instrumentGroups: Array.isArray(loadedDb.instrumentGroups) ? loadedDb.instrumentGroups : [],
+          nonTickerEntities: Array.isArray(loadedDb.nonTickerEntities) ? loadedDb.nonTickerEntities : [],
+          nonTickerMovements: Array.isArray(loadedDb.nonTickerMovements) ? loadedDb.nonTickerMovements : [],
+          nonTickerMovementTypes: Array.isArray(loadedDb.nonTickerMovementTypes) ? loadedDb.nonTickerMovementTypes : [],
           priceCache: (loadedDb.priceCache && typeof loadedDb.priceCache === 'object') ? loadedDb.priceCache : {}
         };
         lastPersistedDbJsonRef.current = JSON.stringify(fullDb);
@@ -3450,6 +3462,9 @@ export default function App() {
       transfers: Array.isArray(pendingImport.transfers) ? pendingImport.transfers : [],
       otherCosts: Array.isArray(pendingImport.otherCosts) ? pendingImport.otherCosts : [],
       instrumentGroups: Array.isArray(pendingImport.instrumentGroups) ? pendingImport.instrumentGroups : [],
+      nonTickerEntities: Array.isArray(pendingImport.nonTickerEntities) ? pendingImport.nonTickerEntities : [],
+      nonTickerMovements: Array.isArray(pendingImport.nonTickerMovements) ? pendingImport.nonTickerMovements : [],
+      nonTickerMovementTypes: Array.isArray(pendingImport.nonTickerMovementTypes) ? pendingImport.nonTickerMovementTypes : [],
       priceCache: (pendingImport.priceCache && typeof pendingImport.priceCache === 'object') ? pendingImport.priceCache : {}
     };
 
@@ -3484,8 +3499,33 @@ export default function App() {
       transfers: [...(currentDb.transfers || [])],
       otherCosts: [...(currentDb.otherCosts || [])],
       instrumentGroups: [...(currentDb.instrumentGroups || [])],
+      nonTickerEntities: [...(currentDb.nonTickerEntities || [])],
+      nonTickerMovements: [...(currentDb.nonTickerMovements || [])],
+      nonTickerMovementTypes: [...(currentDb.nonTickerMovementTypes || [])],
       priceCache: JSON.parse(JSON.stringify(currentDb.priceCache || {}))
     };
+
+    if (pendingImport.nonTickerEntities) {
+      pendingImport.nonTickerEntities.forEach((nte: NonTickerEntity) => {
+        const existingIdx = newDb.nonTickerEntities!.findIndex(ex => ex.id === nte.id);
+        if (existingIdx >= 0) {
+          newDb.nonTickerEntities![existingIdx] = nte;
+        } else {
+          newDb.nonTickerEntities!.push(nte);
+        }
+      });
+    }
+
+    if (pendingImport.nonTickerMovements) {
+      pendingImport.nonTickerMovements.forEach((ntm: NonTickerMovement) => {
+        const existingIdx = newDb.nonTickerMovements!.findIndex(ex => ex.id === ntm.id);
+        if (existingIdx >= 0) {
+          newDb.nonTickerMovements![existingIdx] = ntm;
+        } else {
+          newDb.nonTickerMovements!.push(ntm);
+        }
+      });
+    }
 
     if (pendingImport.portfolios) {
       pendingImport.portfolios.forEach((p: Portfolio) => {
@@ -3666,6 +3706,7 @@ export default function App() {
                 { id: 'dividends', label: t.dividendsTab || 'Dividendi', icon: DollarSign },
                 { id: 'otherCosts', label: t.otherCostsTab, icon: Percent },                
                 { id: 'inflation', label: t.inflationTitle, icon: TrendingUp },
+                { id: 'nonTicker', label: t.nonTickerTab || 'Attività Senza Ticker', icon: Landmark },
                 { id: 'tools', label: t.tools, icon: Calculator },
                 { id: 'mission', label: t.mission, icon: Coins },
                 { id: 'settings', label: t.settings, icon: SettingsIcon },
@@ -3983,7 +4024,7 @@ export default function App() {
                     {absoluteGain >= 0 ? '+' : ''}{formatCurrency(absoluteGain, selectedCurrency)}
                   </div>
                   <div className={`text-[10px] font-bold font-mono tracking-wider uppercase ${absoluteGain >= 0 ? 'text-emerald-500' : 'text-rose-500'}`}>
-                    {absoluteGain >= 0 ? '▲' : '▼'} {percentageReturn.toFixed(2)}% ROI
+                    {absoluteGain >= 0 ? '▲' : '▼'} {(percentageReturn ?? 0).toFixed(2)}% ROI
                   </div>
                 </div>
 
@@ -3997,7 +4038,7 @@ export default function App() {
                     {dailyChangeAbsolute >= 0 ? '+' : ''}{formatCurrency(dailyChangeAbsolute, selectedCurrency)}
                   </div>
                   <div className={`text-[10px] font-bold font-mono tracking-wider uppercase ${dailyChangeAbsolute >= 0 ? 'text-emerald-500' : 'text-rose-500'}`}>
-                    {dailyChangeAbsolute >= 0 ? '▲' : '▼'} {dailyGainPercentage >= 0 ? '+' : ''}{dailyGainPercentage.toFixed(2)}% {t.yesterdayLabel}
+                    {dailyChangeAbsolute >= 0 ? '▲' : '▼'} {dailyGainPercentage >= 0 ? '+' : ''}{(dailyGainPercentage ?? 0).toFixed(2)}% {t.yesterdayLabel}
                   </div>
                 </div>
               </div>
@@ -4006,26 +4047,26 @@ export default function App() {
               <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
                 <div className="bg-slate-900/20 p-4 rounded-2xl border border-slate-800/60 flex flex-col justify-between gap-1 text-xs hover:border-emerald-500/10 transition-all duration-300">
                   <span className="text-slate-400 uppercase tracking-widest font-mono font-black text-[10px]">{t.twrrReturn || 'TWRR Return'}</span>
-                  <span className={`font-bold font-mono text-sm ${overallPortfolioPerformance.twrrPercentage >= 0 ? 'text-emerald-400' : 'text-rose-500'}`}>
-                    {overallPortfolioPerformance.twrrPercentage >= 0 ? '+' : ''}{overallPortfolioPerformance.twrrPercentage.toFixed(2)}%
+                  <span className={`font-bold font-mono text-sm ${(overallPortfolioPerformance?.twrrPercentage ?? 0) >= 0 ? 'text-emerald-400' : 'text-rose-500'}`}>
+                    {(overallPortfolioPerformance?.twrrPercentage ?? 0) >= 0 ? '+' : ''}{(overallPortfolioPerformance?.twrrPercentage ?? 0).toFixed(2)}%
                   </span>
                 </div>
 
                 <div className="bg-slate-900/20 p-4 rounded-2xl border border-slate-800/60 flex flex-col justify-between gap-1 text-xs hover:border-emerald-500/10 transition-all duration-300">
                   <span className="text-slate-400 uppercase tracking-widest font-mono font-black text-[10px]">{t.annualizedReturn || 'MWRR (Annualized)'}</span>
-                  <span className={`font-bold font-mono text-sm ${overallPortfolioPerformance.mwrrAnnualized >= 0 ? 'text-emerald-400' : 'text-rose-500'}`}>
-                    {overallPortfolioPerformance.mwrrAnnualized >= 0 ? '+' : ''}{overallPortfolioPerformance.mwrrAnnualized.toFixed(2)}%
+                  <span className={`font-bold font-mono text-sm ${(overallPortfolioPerformance?.mwrrAnnualized ?? 0) >= 0 ? 'text-emerald-400' : 'text-rose-500'}`}>
+                    {(overallPortfolioPerformance?.mwrrAnnualized ?? 0) >= 0 ? '+' : ''}{(overallPortfolioPerformance?.mwrrAnnualized ?? 0).toFixed(2)}%
                   </span>
                 </div>
 
                 <div className="bg-slate-900/20 p-4 rounded-2xl border border-slate-800/60 flex flex-col justify-between gap-1 text-xs hover:border-emerald-500/10 transition-all duration-300">
                   <span className="text-slate-400 uppercase tracking-widest font-mono font-black text-[10px]">{t.volatility}</span>
-                  <span className="font-bold font-mono text-amber-500 text-sm">{overallPortfolioPerformance.volatility.toFixed(1)}%</span>
+                  <span className="font-bold font-mono text-amber-500 text-sm">{(overallPortfolioPerformance?.volatility ?? 0).toFixed(1)}%</span>
                 </div>
 
                 <div className="bg-slate-900/20 p-4 rounded-2xl border border-slate-800/60 flex flex-col justify-between gap-1 text-xs hover:border-emerald-500/10 transition-all duration-300">
                   <span className="text-slate-400 uppercase tracking-widest font-mono font-black text-[10px]">{t.maxDrawdown}</span>
-                  <span className="font-bold font-mono text-rose-500 text-sm">-{overallPortfolioPerformance.maxDrawdown.toFixed(1)}%</span>
+                  <span className="font-bold font-mono text-rose-500 text-sm">-{(overallPortfolioPerformance?.maxDrawdown ?? 0).toFixed(1)}%</span>
                 </div>
               </div>
 
@@ -5450,6 +5491,19 @@ export default function App() {
               onOpenNewDividend={handleOpenNewDividend}
               onEditTransaction={handleEditClick}
               onDeleteTransaction={requestDeleteTransaction}
+            />
+          )}
+
+          {/* TAB: NON-TICKER ASSETS & INVESTMENTS */}
+          {activeTab === 'nonTicker' && (
+            <NonTickerAssetsPage
+              db={db}
+              saveDatabaseState={saveDatabaseState}
+              selectedCurrency={selectedCurrency}
+              convertValue={convertValue}
+              t={t}
+              lang={lang}
+              activeCurrencies={activeCurrencies}
             />
           )}
 
