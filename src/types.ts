@@ -110,8 +110,13 @@ export enum NonTickerMovementType {
   EMPLOYEE_CONTRIBUTION = 'EMPLOYEE_CONTRIBUTION',
   EMPLOYER_CONTRIBUTION = 'EMPLOYER_CONTRIBUTION',
   TFR = 'TFR',
+  DIVESTMENT = 'DIVESTMENT',
+  CASHBACK = 'CASHBACK',
   OTHER_INFLOW = 'OTHER_INFLOW',
   WITHDRAWAL = 'WITHDRAWAL',
+  INVESTMENT = 'INVESTMENT',
+  CARD_SPEND = 'CARD_SPEND',
+  FEE = 'FEE',
   OTHER_OUTFLOW = 'OTHER_OUTFLOW',
   RETURN = 'RETURN',
   VALUATION = 'VALUATION'
@@ -158,6 +163,16 @@ export interface NonTickerMovement {
   unitPrice?: number;
   fee?: number;
   notes?: string;
+  externalId?: string;
+  importProvider?: string;
+  importMetadata?: Record<string, any>;
+}
+
+export interface NonTickerTablePreferences {
+  sortColumn?: string;
+  sortDirection?: 'asc' | 'desc';
+  visibleColumns?: string[];
+  pageSize?: number;
 }
 
 export interface SystemSettings {
@@ -173,6 +188,7 @@ export interface SystemSettings {
   targetWeights?: { [symbol: string]: number };
   columnWidths?: { [columnId: string]: number };
   aggregateInstrumentsView?: boolean;
+  nonTickerTablePreferences?: NonTickerTablePreferences;
 }
 
 export interface DBState {
@@ -782,8 +798,13 @@ export interface LanguagePhrases {
   mvEmployeeContrib?: string;
   mvEmployerContrib?: string;
   mvTfr?: string;
+  mvDivestment?: string;
+  mvCashback?: string;
   mvOtherInflow?: string;
   mvWithdrawal?: string;
+  mvInvestment?: string;
+  mvCardSpend?: string;
+  mvFee?: string;
   mvOtherOutflow?: string;
   mvReturn?: string;
   mvValuation?: string;
@@ -1009,6 +1030,78 @@ export interface LanguagePhrases {
   statementValuationShort?: string;
   capitalFlowShort?: string;
   investedShort?: string;
+
+  // Importer keys
+  importMovementsBtn?: string;
+  importModalTitle?: string;
+  importModalDesc?: string;
+  importFileSelectPrompt?: string;
+  importDragDropHint?: string;
+  importTargetEntityLabel?: string;
+  importSelectProviderLabel?: string;
+  importAutoDetectedBadge?: string;
+  importAutoDetectFailed?: string;
+  importSummaryTitle?: string;
+  importTotalAnalyzed?: string;
+  importReadyToImport?: string;
+  importDuplicatesSkipped?: string;
+  importUnsupportedSkipped?: string;
+  importErrorsCount?: string;
+  importExecuteBtn?: string;
+  importNoNewMovements?: string;
+  importSuccessMsg?: string;
+  importStatusValid?: string;
+  importStatusDuplicate?: string;
+  importStatusSkipped?: string;
+  importStatusError?: string;
+  importPreviewTitle?: string;
+  importNoFileSelected?: string;
+  importProcessingFile?: string;
+
+  // Analytical Table Keys
+  columnsVisibility?: string;
+  columnsPicker?: string;
+  resetFilters?: string;
+  activeFilters?: string;
+  sourceFilter?: string;
+  sourceAll?: string;
+  sourceManual?: string;
+  sourceImported?: string;
+  filterDateFrom?: string;
+  filterDateTo?: string;
+  filterMovementTypes?: string;
+  filterAssets?: string;
+  filterCashFlowDirection?: string;
+  filterAllFlows?: string;
+  filterInflowsOnly?: string;
+  filterOutflowsOnly?: string;
+  filterReturnsOnly?: string;
+  filterValuationsOnly?: string;
+  tableTotals?: string;
+  totalInflowsSum?: string;
+  totalOutflowsSum?: string;
+  netFlowSum?: string;
+  totalGrossReturnsSum?: string;
+  totalTaxesSum?: string;
+  totalNetReturnsSum?: string;
+  totalCommissionsSum?: string;
+  itemsPerPage?: string;
+  pageOf?: string;
+  showingRows?: string;
+  ofTotalRows?: string;
+  originColumn?: string;
+  feeColumn?: string;
+  unitPriceColumn?: string;
+  grossReturnColumn?: string;
+  taxAmountColumn?: string;
+  netReturnColumn?: string;
+  valuationColumn?: string;
+  inflowOutflowColumn?: string;
+  allColumns?: string;
+  restoreDefaultColumns?: string;
+  noMatchingRecords?: string;
+  externalTransactionId?: string;
+  importedVia?: string;
 }
 
 export interface TranslationDictionary {

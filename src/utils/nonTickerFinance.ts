@@ -126,10 +126,15 @@ export const DEFAULT_NON_TICKER_MOVEMENT_TYPES: NonTickerMovementTypeConfig[] = 
   { id: 'EMPLOYER_CONTRIBUTION', name: 'Contributo Datore di Lavoro', direction: 'INFLOW', isDefault: true, order: 2 },
   { id: 'TFR', name: 'Quota TFR Versata', direction: 'INFLOW', isDefault: true, order: 3 },
   { id: 'DEPOSIT', name: 'Versamento / Deposito', direction: 'INFLOW', isDefault: true, order: 4 },
-  { id: 'OTHER_INFLOW', name: 'Altro Flusso in Entrata', direction: 'INFLOW', isDefault: true, order: 5 },
+  { id: 'DIVESTMENT', name: 'Disinvestimento / Vendita Titoli', direction: 'INFLOW', isDefault: true, order: 5 },
+  { id: 'CASHBACK', name: 'Cashback / Saveback / Bonus', direction: 'INFLOW', isDefault: true, order: 6 },
+  { id: 'OTHER_INFLOW', name: 'Altro Flusso in Entrata', direction: 'INFLOW', isDefault: true, order: 7 },
   // Uscite (-)
-  { id: 'WITHDRAWAL', name: 'Prelievo / Riscatto / Anticipazione', direction: 'OUTFLOW', isDefault: true, order: 6 },
-  { id: 'OTHER_OUTFLOW', name: 'Altro Flusso in Uscita', direction: 'OUTFLOW', isDefault: true, order: 7 }
+  { id: 'WITHDRAWAL', name: 'Prelievo / Riscatto / Anticipazione', direction: 'OUTFLOW', isDefault: true, order: 8 },
+  { id: 'INVESTMENT', name: 'Investimento / Acquisto Titoli', direction: 'OUTFLOW', isDefault: true, order: 9 },
+  { id: 'CARD_SPEND', name: 'Spesa con Carta', direction: 'OUTFLOW', isDefault: true, order: 10 },
+  { id: 'FEE', name: 'Canone / Spese di Gestione', direction: 'OUTFLOW', isDefault: true, order: 11 },
+  { id: 'OTHER_OUTFLOW', name: 'Altro Flusso in Uscita', direction: 'OUTFLOW', isDefault: true, order: 12 }
 ];
 
 export function isFlowInflow(type: string, configs?: NonTickerMovementTypeConfig[]): boolean {
@@ -142,6 +147,8 @@ export function isFlowInflow(type: string, configs?: NonTickerMovementTypeConfig
     type === NonTickerMovementType.EMPLOYEE_CONTRIBUTION ||
     type === NonTickerMovementType.EMPLOYER_CONTRIBUTION ||
     type === NonTickerMovementType.TFR ||
+    type === NonTickerMovementType.DIVESTMENT ||
+    type === NonTickerMovementType.CASHBACK ||
     type === NonTickerMovementType.OTHER_INFLOW
   );
 }
@@ -153,6 +160,9 @@ export function isFlowOutflow(type: string, configs?: NonTickerMovementTypeConfi
   }
   return (
     type === NonTickerMovementType.WITHDRAWAL ||
+    type === NonTickerMovementType.INVESTMENT ||
+    type === NonTickerMovementType.CARD_SPEND ||
+    type === NonTickerMovementType.FEE ||
     type === NonTickerMovementType.OTHER_OUTFLOW
   );
 }

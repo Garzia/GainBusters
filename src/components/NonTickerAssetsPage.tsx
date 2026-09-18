@@ -48,7 +48,8 @@ import {
   ArrowDown,
   RefreshCw,
   Coins,
-  Calendar
+  Calendar,
+  FileUp
 } from 'lucide-react';
 import {
   DBState,
@@ -58,7 +59,8 @@ import {
   NonTickerMovementType,
   NonTickerMovementTypeConfig,
   NonTickerCategory,
-  Currency
+  Currency,
+  NonTickerTablePreferences
 } from '../types.ts';
 import {
   calculateNonTickerMetrics,
@@ -74,6 +76,8 @@ import { cleanFloatNoise } from '../utils/finance.ts';
 import { formatCurrency } from '../App.tsx';
 import { ModalPortal } from './ModalPortal.tsx';
 import { QuantityDisplay } from './QuantityDisplay.tsx';
+import { NonTickerImportModal } from './NonTickerImportModal.tsx';
+import { NonTickerAnalyticsTable } from './NonTickerAnalyticsTable.tsx';
 
 interface NonTickerAssetsPageProps {
   db: DBState;
@@ -96,11 +100,17 @@ export const NonTickerAssetsPage: React.FC<NonTickerAssetsPageProps> = ({
   const entities = useMemo(() => db.nonTickerEntities || [], [db.nonTickerEntities]);
   const movements = useMemo(() => db.nonTickerMovements || [], [db.nonTickerMovements]);
 
-  // Movement Types configuration (default fallback if not set)
+  // Movement Types configuration (default fallback if not set, with seamless merge of new defaults)
   const movementTypeConfigs = useMemo<NonTickerMovementTypeConfig[]>(() => {
-    return db.nonTickerMovementTypes && db.nonTickerMovementTypes.length > 0
-      ? db.nonTickerMovementTypes
-      : DEFAULT_NON_TICKER_MOVEMENT_TYPES;
+    if (!db.nonTickerMovementTypes || db.nonTickerMovementTypes.length === 0) {
+      return DEFAULT_NON_TICKER_MOVEMENT_TYPES;
+    }
+    const existingIds = new Set(db.nonTickerMovementTypes.map(c => c.id));
+    const missingDefaults = DEFAULT_NON_TICKER_MOVEMENT_TYPES.filter(d => !existingIds.has(d.id));
+    if (missingDefaults.length > 0) {
+      return [...db.nonTickerMovementTypes, ...missingDefaults];
+    }
+    return db.nonTickerMovementTypes;
   }, [db.nonTickerMovementTypes]);
 
   // Currencies list synchronized with user settings
@@ -198,6 +208,9 @@ export const NonTickerAssetsPage: React.FC<NonTickerAssetsPageProps> = ({
     id: '',
     name: ''
   });
+
+  // Import movements modal state
+  const [importModalOpen, setImportModalOpen] = useState<boolean>(false);
 
   const [manageTypesForm, setManageTypesForm] = useState<{
     open: boolean;
@@ -523,17 +536,27 @@ export const NonTickerAssetsPage: React.FC<NonTickerAssetsPageProps> = ({
       case NonTickerMovementType.EMPLOYEE_CONTRIBUTION:
         return t.mvEmployeeContrib || 'Contributo Dipendente';
       case NonTickerMovementType.EMPLOYER_CONTRIBUTION:
-        return t.mvEmployerContrib || 'Contributo Datore';
+        return t.mvEmployerContrib || 'Contributo Datore di Lavoro';
       case NonTickerMovementType.TFR:
-        return t.mvTfr || 'Quota TFR';
+        return t.mvTfr || 'Quota TFR Versata';
       case NonTickerMovementType.DEPOSIT:
-        return t.mvDeposit || 'Versamento';
+        return t.mvDeposit || 'Versamento / Deposito';
+      case NonTickerMovementType.DIVESTMENT:
+        return t.mvDivestment || 'Disinvestimento / Vendita Titoli';
+      case NonTickerMovementType.CASHBACK:
+        return t.mvCashback || 'Cashback / Saveback / Bonus';
       case NonTickerMovementType.WITHDRAWAL:
-        return t.mvWithdrawal || 'Prelievo / Riscatto';
+        return t.mvWithdrawal || 'Prelievo / Riscatto / Anticipazione';
+      case NonTickerMovementType.INVESTMENT:
+        return t.mvInvestment || 'Investimento / Acquisto Titoli';
+      case NonTickerMovementType.CARD_SPEND:
+        return t.mvCardSpend || 'Spesa con Carta';
+      case NonTickerMovementType.FEE:
+        return t.mvFee || 'Canone / Spese di Gestione';
       case NonTickerMovementType.OTHER_INFLOW:
-        return t.mvOtherInflow || 'Altro Versamento';
+        return t.mvOtherInflow || 'Altro Flusso in Entrata';
       case NonTickerMovementType.OTHER_OUTFLOW:
-        return t.mvOtherOutflow || 'Altra Uscita';
+        return t.mvOtherOutflow || 'Altro Flusso in Uscita';
       default:
         return typeId;
     }
@@ -952,6 +975,17 @@ export const NonTickerAssetsPage: React.FC<NonTickerAssetsPageProps> = ({
     }));
   };
 
+  const handleSaveTablePreferences = async (prefs: NonTickerTablePreferences) => {
+    const updatedDb: DBState = {
+      ...db,
+      settings: {
+        ...db.settings,
+        nonTickerTablePreferences: prefs
+      }
+    };
+    await saveDatabaseState(updatedDb);
+  };
+
   return (
     <div className="space-y-6 animate-fade-in text-slate-100 pb-16">
       {/* HEADER SECTION */}
@@ -1029,6 +1063,16 @@ export const NonTickerAssetsPage: React.FC<NonTickerAssetsPageProps> = ({
           >
             <Percent className="w-3.5 h-3.5 text-indigo-400" />
             <span>{t.newReturnBtn || 'Registra Rendimento'}</span>
+          </button>
+
+          <button
+            type="button"
+            onClick={() => setImportModalOpen(true)}
+            className="flex items-center gap-1.5 px-3.5 py-2 text-xs font-bold text-violet-300 bg-violet-600/20 hover:bg-violet-600/30 border border-violet-500/30 hover:border-violet-500/50 rounded-xl transition cursor-pointer shadow-sm"
+            title={t.importMovementsBtn || 'Importa movimenti da file esterno (Trade Republic CSV, ecc.)'}
+          >
+            <FileUp className="w-3.5 h-3.5 text-violet-400" />
+            <span>{t.importMovementsBtn || 'Importa'}</span>
           </button>
 
           <button
@@ -1830,224 +1874,23 @@ export const NonTickerAssetsPage: React.FC<NonTickerAssetsPageProps> = ({
         </div>
       </div>
 
-      {/* ================= MOVEMENTS & VALUATIONS LOG TABLE ================= */}
-      <div className="bg-slate-900/40 border border-slate-800/80 p-5 sm:p-6 rounded-3xl space-y-4 shadow-sm backdrop-blur-md">
-        <div className="flex flex-col md:flex-row md:items-center justify-between gap-3 border-b border-slate-800/70 pb-3">
-          <div className="flex items-center gap-2">
-            <span className="p-1.5 bg-slate-800 rounded-xl text-slate-300 border border-slate-700/60">
-              <FileText className="w-4 h-4" />
-            </span>
-            <div>
-              <h3 className="font-extrabold text-sm text-white tracking-wide uppercase font-mono">
-                {t.movementsHistoryTitle || 'Registro Movimenti e Rilevazioni'}
-              </h3>
-              <span className="text-[10px] text-slate-400 font-mono">
-                {filteredMovements.length} {t.recordsFound || 'registrazioni trovate'}
-              </span>
-            </div>
-          </div>
-
-          {/* Filter Bar */}
-          <div className="flex flex-wrap items-center gap-2">
-            {/* Search */}
-            <div className="relative">
-              <Search className="w-3.5 h-3.5 text-slate-500 absolute left-3 top-1/2 -translate-y-1/2" />
-              <input
-                type="text"
-                placeholder={t.search || 'Cerca...'}
-                value={searchQuery}
-                onChange={e => setSearchQuery(e.target.value)}
-                className="bg-slate-950/80 border border-slate-800 pl-8 pr-3 py-1.5 rounded-xl text-xs text-white placeholder-slate-500 focus:outline-none focus:border-emerald-500/60 w-36 sm:w-48"
-              />
-              {searchQuery && (
-                <button
-                  type="button"
-                  onClick={() => setSearchQuery('')}
-                  className="absolute right-2.5 top-1/2 -translate-y-1/2 text-slate-500 hover:text-white"
-                >
-                  <X className="w-3 h-3" />
-                </button>
-              )}
-            </div>
-
-            {/* Type Filter */}
-            <select
-              value={movementFilterType}
-              onChange={e => setMovementFilterType(e.target.value)}
-              className="bg-slate-950/80 border border-slate-800 px-3 py-1.5 rounded-xl text-xs text-slate-300 font-semibold focus:outline-none focus:border-emerald-500/60 cursor-pointer"
-            >
-              <option value="ALL">{t.allTypesFilter || 'Tutti i tipi'}</option>
-              <option value="CAPITAL">{t.capitalFlowsFilter || 'Flussi di Capitale'}</option>
-              <option value="VALUATION">{t.valuationRecordsFilter || 'Rilevazioni Saldo'}</option>
-              <option value="RETURN">{t.returnsFilter || 'Rendimenti'}</option>
-            </select>
-          </div>
-        </div>
-
-        {/* Table */}
-        {filteredMovements.length > 0 ? (
-          <div className="overflow-x-auto custom-scrollbar">
-            <table className="w-full text-left border-collapse text-xs">
-              <thead>
-                <tr className="border-b border-slate-800/80 text-[10px] text-slate-400 font-mono uppercase tracking-wider">
-                  <th className="py-2.5 px-3">{t.dateColumn || 'Data'}</th>
-                  {selectedEntityId === 'ALL' && <th className="py-2.5 px-3">{t.entityColumn || 'Attività'}</th>}
-                  <th className="py-2.5 px-3">{t.operationTypeColumn || 'Tipo Operazione'}</th>
-                  <th className="py-2.5 px-3">{t.amountValueColumn || 'Importo / Controvalore'}</th>
-                  {hasUnitsInView && <th className="py-2.5 px-3 font-mono">{t.unitsColumn || 'Quote'}</th>}
-                  <th className="py-2.5 px-3">{t.detailsTaxColumn || 'Dettagli / Fisco'}</th>
-                  <th className="py-2.5 px-3">{t.notesColumn || 'Note'}</th>
-                  <th className="py-2.5 px-3 text-right">{t.actionsColumn || 'Azioni'}</th>
-                </tr>
-              </thead>
-              <tbody className="divide-y divide-slate-800/50">
-                {filteredMovements.map(m => {
-                  const ent = entities.find(e => e.id === m.entityId);
-                  const isValuation = m.type === NonTickerMovementType.VALUATION;
-                  const isReturn = m.type === NonTickerMovementType.RETURN;
-                  const isOutflow = isFlowOutflow(m.type, movementTypeConfigs);
-
-                  return (
-                    <tr
-                      key={m.id}
-                      className="hover:bg-slate-800/30 transition-colors duration-150 group"
-                    >
-                      {/* Date */}
-                      <td className="py-3 px-3 font-mono text-slate-300 whitespace-nowrap">
-                        {formatDateString(m.date, lang)}
-                      </td>
-
-                      {/* Entity name (if viewing ALL) */}
-                      {selectedEntityId === 'ALL' && (
-                        <td className="py-3 px-3 font-semibold text-white whitespace-nowrap">
-                          <span className="flex items-center gap-1.5">
-                            {ent && getCategoryIcon(ent.category)}
-                            <span className="truncate max-w-[150px]">{ent ? ent.name : m.entityId}</span>
-                          </span>
-                        </td>
-                      )}
-
-                      {/* Type Badge */}
-                      <td className="py-3 px-3 whitespace-nowrap">
-                        {getMovementTypeBadge(m.type)}
-                      </td>
-
-                      {/* Amount / Valuation */}
-                      <td className="py-3 px-3 font-mono font-bold whitespace-nowrap">
-                        {isValuation ? (
-                          <span className="text-cyan-400">
-                            {t.balanceLabel || 'Saldo'}: {formatCurrency(m.valuation || 0, ent?.currency || selectedCurrency)}
-                          </span>
-                        ) : isReturn ? (
-                          <span className="text-emerald-400">
-                            +{formatCurrency(m.netReturn || 0, ent?.currency || selectedCurrency)} {t.netLabel || 'netto'}
-                          </span>
-                        ) : isOutflow ? (
-                          <span className="text-rose-400">
-                            -{formatCurrency(m.amount || 0, ent?.currency || selectedCurrency)}
-                          </span>
-                        ) : (
-                          <span className="text-sky-400">
-                            +{formatCurrency(m.amount || 0, ent?.currency || selectedCurrency)}
-                          </span>
-                        )}
-                      </td>
-
-                      {/* Units Column (if present in view) */}
-                      {hasUnitsInView && (
-                        <td className="py-3 px-3 font-mono text-xs whitespace-nowrap">
-                          {m.units !== undefined && m.units !== null && Number(m.units) > 0 ? (
-                            <span className={isOutflow ? 'text-rose-400 font-bold' : 'text-cyan-300 font-bold'}>
-                              {isOutflow ? '-' : isValuation ? '' : '+'}
-                              <QuantityDisplay value={m.units} />
-                            </span>
-                          ) : (
-                            <span className="text-slate-600">—</span>
-                          )}
-                        </td>
-                      )}
-
-                      {/* Details / Unit Price / Fee / Tax breakdown */}
-                      <td className="py-3 px-3 font-mono text-[11px] text-slate-400 whitespace-nowrap">
-                        {isReturn ? (
-                          <span>
-                            {t.grossShort || 'Lordo'}: {formatCurrency(m.grossReturn || 0, ent?.currency || selectedCurrency)} | {t.taxesLabel || 'Imposte'}:{' '}
-                            <span className="text-rose-400">
-                              -{formatCurrency(m.taxAmount || 0, ent?.currency || selectedCurrency)}
-                            </span>{' '}
-                            {m.isReinvested === false && (
-                              <span className="text-[9px] text-amber-400 bg-amber-500/10 px-1 py-0.5 rounded ml-1">
-                                {t.liquidatedBadge || 'Liquidato'}
-                              </span>
-                            )}
-                          </span>
-                        ) : isValuation ? (
-                          <span>
-                            {m.unitPrice ? (
-                              <span className="text-cyan-300">
-                                NAV: {formatCurrency(m.unitPrice, ent?.currency || selectedCurrency)}/{t.unitShort || 'q'}
-                              </span>
-                            ) : (
-                              <span className="text-slate-500">{t.statementValuationShort || 'Rilevazione estratto conto'}</span>
-                            )}
-                          </span>
-                        ) : (
-                          <div className="flex items-center gap-1.5 flex-wrap">
-                            {m.unitPrice && (
-                              <span className="text-cyan-300">
-                                {formatCurrency(m.unitPrice, ent?.currency || selectedCurrency)}/{t.unitShort || 'q'}
-                              </span>
-                            )}
-                            {m.fee !== undefined && m.fee !== null && m.fee > 0 && (
-                              <span className="text-amber-400/90">
-                                {t.commissionsShort || 'Comm'}: -{formatCurrency(m.fee, ent?.currency || selectedCurrency)}
-                              </span>
-                            )}
-                            {!m.unitPrice && (!m.fee || m.fee === 0) && (
-                              <span className="text-slate-500">{t.capitalFlowShort || 'Flusso capitale'}</span>
-                            )}
-                          </div>
-                        )}
-                      </td>
-
-                      {/* Notes */}
-                      <td className="py-3 px-3 text-slate-400 max-w-[200px] truncate" title={m.notes}>
-                        {m.notes || '—'}
-                      </td>
-
-                      {/* Actions */}
-                      <td className="py-3 px-3 text-right whitespace-nowrap">
-                        <div className="flex items-center justify-end gap-1.5">
-                          <button
-                            type="button"
-                            onClick={() => handleOpenEditMovement(m)}
-                            className="p-1 rounded text-slate-400 hover:text-white hover:bg-slate-800 transition cursor-pointer"
-                            title={t.editMovementBtn || 'Modifica'}
-                          >
-                            <Edit className="w-3.5 h-3.5" />
-                          </button>
-                          <button
-                            type="button"
-                            onClick={() => handleRequestDeleteMovement(m)}
-                            className="p-1 rounded text-slate-400 hover:text-rose-400 hover:bg-rose-950/20 transition cursor-pointer"
-                            title={t.deleteMovementBtn || t.deleteEntityBtn || 'Elimina'}
-                          >
-                            <Trash2 className="w-3.5 h-3.5" />
-                          </button>
-                        </div>
-                      </td>
-                    </tr>
-                  );
-                })}
-              </tbody>
-            </table>
-          </div>
-        ) : (
-          <div className="py-8 text-center text-slate-400 text-xs">
-            {t.noMovementsFound || 'Nessun movimento trovato per i filtri selezionati.'}
-          </div>
-        )}
-      </div>
+      {/* ================= ADVANCED ANALYTICAL MOVEMENTS TABLE ================= */}
+      <NonTickerAnalyticsTable
+        movements={movements}
+        entities={entities}
+        movementTypeConfigs={movementTypeConfigs}
+        selectedEntityId={selectedEntityId}
+        onSelectEntityId={setSelectedEntityId}
+        selectedCurrency={selectedCurrency}
+        t={t}
+        lang={lang}
+        onEditMovement={handleOpenEditMovement}
+        onRequestDeleteMovement={handleRequestDeleteMovement}
+        initialPreferences={db.settings?.nonTickerTablePreferences}
+        onSavePreferences={handleSaveTablePreferences}
+        getCategoryIcon={getCategoryIcon}
+        getMovementTypeName={getMovementTypeName}
+      />
 
       {/* ================= MODAL 1: ADD / EDIT ENTITY (via ModalPortal) ================= */}
       {entityForm.open && (
@@ -2869,6 +2712,23 @@ export const NonTickerAssetsPage: React.FC<NonTickerAssetsPageProps> = ({
             </div>
           </div>
         </ModalPortal>
+      )}
+
+      {/* ================= MODAL 5: IMPORT MOVEMENTS (via ModalPortal) ================= */}
+      {importModalOpen && (
+        <NonTickerImportModal
+          isOpen={importModalOpen}
+          onClose={() => setImportModalOpen(false)}
+          db={db}
+          entities={entities}
+          movements={movements}
+          preSelectedEntityId={selectedEntityId !== 'ALL' ? selectedEntityId : undefined}
+          onSaveDatabase={async (updatedDb) => {
+            await saveDatabaseState(updatedDb);
+          }}
+          t={t}
+          lang={lang}
+        />
       )}
     </div>
   );
