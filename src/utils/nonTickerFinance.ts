@@ -133,8 +133,10 @@ export const DEFAULT_NON_TICKER_MOVEMENT_TYPES: NonTickerMovementTypeConfig[] = 
   { id: 'WITHDRAWAL', name: 'Prelievo / Riscatto / Anticipazione', direction: 'OUTFLOW', isDefault: true, order: 8 },
   { id: 'INVESTMENT', name: 'Investimento / Acquisto Titoli', direction: 'OUTFLOW', isDefault: true, order: 9 },
   { id: 'CARD_SPEND', name: 'Spesa con Carta', direction: 'OUTFLOW', isDefault: true, order: 10 },
-  { id: 'FEE', name: 'Canone / Spese di Gestione', direction: 'OUTFLOW', isDefault: true, order: 11 },
-  { id: 'OTHER_OUTFLOW', name: 'Altro Flusso in Uscita', direction: 'OUTFLOW', isDefault: true, order: 12 }
+  { id: 'STAMP_DUTY_PORTFOLIO', name: 'Imposta di Bollo (Portafoglio Titoli)', direction: 'OUTFLOW', isDefault: true, order: 11 },
+  { id: 'STAMP_DUTY_CASH', name: 'Imposta di Bollo (Liquidità / Conto)', direction: 'OUTFLOW', isDefault: true, order: 12 },
+  { id: 'FEE', name: 'Canone / Spese di Gestione', direction: 'OUTFLOW', isDefault: true, order: 13 },
+  { id: 'OTHER_OUTFLOW', name: 'Altro Flusso in Uscita', direction: 'OUTFLOW', isDefault: true, order: 14 }
 ];
 
 export function isFlowInflow(type: string, configs?: NonTickerMovementTypeConfig[]): boolean {
@@ -162,8 +164,27 @@ export function isFlowOutflow(type: string, configs?: NonTickerMovementTypeConfi
     type === NonTickerMovementType.WITHDRAWAL ||
     type === NonTickerMovementType.INVESTMENT ||
     type === NonTickerMovementType.CARD_SPEND ||
+    type === NonTickerMovementType.STAMP_DUTY_PORTFOLIO ||
+    type === NonTickerMovementType.STAMP_DUTY_CASH ||
     type === NonTickerMovementType.FEE ||
     type === NonTickerMovementType.OTHER_OUTFLOW
+  );
+}
+
+/**
+ * Identifica se un movimento di uscita rappresenta una spesa / imposta del conto stesso
+ * (es. Imposta di bollo liquidità, canone, spese di tenuta conto)
+ * anziché un prelievo di capitale da parte dell'investitore o un'uscita verso asset esterni.
+ */
+export function isAccountCostMovement(type: string): boolean {
+  return (
+    type === NonTickerMovementType.STAMP_DUTY_CASH ||
+    type === NonTickerMovementType.FEE ||
+    type === 'STAMP_DUTY_CASH' ||
+    type === 'FEE' ||
+    type === 'CUSTODY_FEE' ||
+    type === 'SUBSCRIPTION_FEE' ||
+    type.toUpperCase().includes('STAMP_DUTY_CASH')
   );
 }
 
@@ -490,6 +511,7 @@ export function calculateNonTickerMetrics(
   let totalInflows = 0;
   let totalOutflows = 0;
   let totalCommissions = 0;
+  let totalAccountCosts = 0;
   let employeeContrib = 0;
   let employerContrib = 0;
   let tfrContrib = 0;
@@ -577,7 +599,13 @@ export function calculateNonTickerMetrics(
         amt = mUnits * mUnitPrice;
       }
       totalOutflows += amt;
-      totalCommissions += mFee;
+      const isCost = isAccountCostMovement(m.type);
+      if (isCost) {
+        totalAccountCosts += amt;
+        totalCommissions += amt + mFee;
+      } else {
+        totalCommissions += mFee;
+      }
       runningInvestedNominal -= amt;
       runningInvestedWithCommissions -= (amt - mFee);
       runningBalance = Math.max(0, runningBalance - amt);
@@ -731,10 +759,13 @@ export function calculateNonTickerMetrics(
         mwrrCashFlows.push({ dateStr: dStr, amount: cashOut });
       }
     } else if (isFlowOutflow(m.type, movementTypeConfigs)) {
-      const amt = m.amount || (m.units && m.unitPrice ? m.units * m.unitPrice : 0) || 0;
-      if (amt > 0) {
-        const cashIn = includeCommissions ? +(amt - fee) : +amt;
-        mwrrCashFlows.push({ dateStr: dStr, amount: cashIn });
+      const isCost = isAccountCostMovement(m.type);
+      if (!isCost) {
+        const amt = m.amount || (m.units && m.unitPrice ? m.units * m.unitPrice : 0) || 0;
+        if (amt > 0) {
+          const cashIn = includeCommissions ? +(amt - fee) : +amt;
+          mwrrCashFlows.push({ dateStr: dStr, amount: cashIn });
+        }
       }
     } else if (m.type === NonTickerMovementType.RETURN && m.isReinvested === false) {
       if ((m.netReturn || 0) > 0) {
@@ -743,8 +774,11 @@ export function calculateNonTickerMetrics(
     }
   }
 
-  if (currentValue > 0) {
-    mwrrCashFlows.push({ dateStr: todayStr, amount: +currentValue });
+  // Valore finale alla data corrente:
+  // Se includeCommissions è false, ripristiniamo le spese di conto per calcolare il rendimento al lordo dei costi
+  const effectiveEndVal = includeCommissions ? currentValue : (currentValue + totalAccountCosts);
+  if (effectiveEndVal > 0) {
+    mwrrCashFlows.push({ dateStr: todayStr, amount: +effectiveEndVal });
   }
 
   const mwrrResult = solveMWRR(mwrrCashFlows);
@@ -849,6 +883,7 @@ export function calculateNonTickerPeriodMetrics(
   let periodInflows = 0;
   let periodOutflows = 0;
   let periodCommissions = 0;
+  let periodAccountCosts = 0;
   let periodGrossReturn = 0;
   let periodTaxes = 0;
   let periodNetReturn = 0;
@@ -868,7 +903,13 @@ export function calculateNonTickerPeriodMetrics(
       let amt = m.amount !== undefined && m.amount !== null ? Number(m.amount) : 0;
       if (amt === 0 && m.units && m.unitPrice) amt = m.units * m.unitPrice;
       periodOutflows += amt;
-      periodCommissions += fee;
+      const isCost = isAccountCostMovement(m.type);
+      if (isCost) {
+        periodAccountCosts += amt;
+        periodCommissions += amt + fee;
+      } else {
+        periodCommissions += fee;
+      }
     } else if (m.type === NonTickerMovementType.RETURN) {
       const gross = m.grossReturn || (m.netReturn !== undefined && m.taxAmount !== undefined ? (m.netReturn + m.taxAmount) : (m.netReturn || 0));
       const tax = m.taxAmount || 0;
@@ -909,9 +950,12 @@ export function calculateNonTickerPeriodMetrics(
         periodCashFlows.push({ dateStr: dStr, amount: includeCommissions ? -(amt + fee) : -amt });
       }
     } else if (isFlowOutflow(m.type, movementTypeConfigs)) {
-      const amt = m.amount || (m.units && m.unitPrice ? m.units * m.unitPrice : 0) || 0;
-      if (amt > 0) {
-        periodCashFlows.push({ dateStr: dStr, amount: includeCommissions ? +(amt - fee) : +amt });
+      const isCost = isAccountCostMovement(m.type);
+      if (!isCost) {
+        const amt = m.amount || (m.units && m.unitPrice ? m.units * m.unitPrice : 0) || 0;
+        if (amt > 0) {
+          periodCashFlows.push({ dateStr: dStr, amount: includeCommissions ? +(amt - fee) : +amt });
+        }
       }
     } else if (m.type === NonTickerMovementType.RETURN && m.isReinvested === false) {
       if ((m.netReturn || 0) > 0) {
@@ -920,8 +964,9 @@ export function calculateNonTickerPeriodMetrics(
     }
   }
 
-  if (endBalance > 0) {
-    periodCashFlows.push({ dateStr: normEnd, amount: +endBalance });
+  const effectiveEndBalance = includeCommissions ? endBalance : (endBalance + periodAccountCosts);
+  if (effectiveEndBalance > 0) {
+    periodCashFlows.push({ dateStr: normEnd, amount: +effectiveEndBalance });
   }
 
   const mwrr = solveMWRR(periodCashFlows);

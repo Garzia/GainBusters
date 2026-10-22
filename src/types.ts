@@ -116,6 +116,8 @@ export enum NonTickerMovementType {
   WITHDRAWAL = 'WITHDRAWAL',
   INVESTMENT = 'INVESTMENT',
   CARD_SPEND = 'CARD_SPEND',
+  STAMP_DUTY_PORTFOLIO = 'STAMP_DUTY_PORTFOLIO',
+  STAMP_DUTY_CASH = 'STAMP_DUTY_CASH',
   FEE = 'FEE',
   OTHER_OUTFLOW = 'OTHER_OUTFLOW',
   RETURN = 'RETURN',
@@ -148,6 +150,16 @@ export interface NonTickerMovementTypeConfig {
   order: number;
 }
 
+export interface NonTickerProject {
+  id: string;
+  name: string;
+  description?: string;
+  color?: string; // Hex color or token
+  isArchived?: boolean;
+  createdAt: string;
+  updatedAt?: string;
+}
+
 export interface NonTickerMovement {
   id: string;
   entityId: string;
@@ -163,6 +175,7 @@ export interface NonTickerMovement {
   unitPrice?: number;
   fee?: number;
   notes?: string;
+  projectIds?: string[]; // Transversal classification: links to 0, 1, or multiple NonTickerProject ids
   externalId?: string;
   importProvider?: string;
   importMetadata?: Record<string, any>;
@@ -202,6 +215,7 @@ export interface DBState {
   nonTickerEntities?: NonTickerEntity[];
   nonTickerMovements?: NonTickerMovement[];
   nonTickerMovementTypes?: NonTickerMovementTypeConfig[];
+  nonTickerProjects?: NonTickerProject[];
   priceCache: {
     // Ticker -> Date (YYYY-MM-DD) -> Price
     [ticker: string]: { [date: string]: number };
@@ -804,6 +818,8 @@ export interface LanguagePhrases {
   mvWithdrawal?: string;
   mvInvestment?: string;
   mvCardSpend?: string;
+  mvStampDutyPortfolio?: string;
+  mvStampDutyCash?: string;
   mvFee?: string;
   mvOtherOutflow?: string;
   mvReturn?: string;
@@ -1099,9 +1115,53 @@ export interface LanguagePhrases {
   inflowOutflowColumn?: string;
   allColumns?: string;
   restoreDefaultColumns?: string;
-  noMatchingRecords?: string;
   externalTransactionId?: string;
   importedVia?: string;
+
+  // Non-Ticker Projects / Classifications
+  projectsLabel?: string;
+  manageProjectsBtn?: string;
+  manageProjectsTitle?: string;
+  manageProjectsDesc?: string;
+  projectFilterLabel?: string;
+  allProjectsOption?: string;
+  noProjectsConfigured?: string;
+  newProjectBtn?: string;
+  projectNamePlaceholder?: string;
+  projectDescPlaceholder?: string;
+  projectColorLabel?: string;
+  archiveProjectBtn?: string;
+  restoreProjectBtn?: string;
+  archivedBadge?: string;
+  showArchivedProjects?: string;
+  hideArchivedProjects?: string;
+  activeProjectsTab?: string;
+  archivedProjectsTab?: string;
+  deleteProjectTitle?: string;
+  deleteProjectConfirm?: string;
+  deleteProjectPrompt?: string;
+  projectSummaryTitle?: string;
+  projectInflowsSum?: string;
+  projectOutflowsSum?: string;
+  projectNetBalance?: string;
+  projectMovementsCount?: string;
+  assignProjectsLabel?: string;
+  noProjectsAssigned?: string;
+  selectProjectsPlaceholder?: string;
+  timeframeCurrentMonth?: string;
+  timeframePreviousMonth?: string;
+  projectsColumn?: string;
+  noMatchingRecords?: string;
+  cancelEdit?: string;
+  editProjectTitle?: string;
+  createNewProjectTitle?: string;
+  projectNameLabel?: string;
+  projectDescLabel?: string;
+  saveChanges?: string;
+  createProjectBtn?: string;
+  noActiveProjectsMsg?: string;
+  noArchivedProjectsMsg?: string;
+  restoreBtn?: string;
 }
 
 export interface TranslationDictionary {

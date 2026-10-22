@@ -47,7 +47,9 @@ import {
   RotateCcw,
   Eye,
   Info,
-  ExternalLink
+  ExternalLink,
+  Tag,
+  FolderKanban
 } from 'lucide-react';
 import {
   NonTickerMovement,
@@ -56,11 +58,13 @@ import {
   NonTickerMovementType,
   LanguagePhrases,
   NonTickerCategory,
-  NonTickerTablePreferences
+  NonTickerTablePreferences,
+  NonTickerProject
 } from '../types.ts';
 import {
   isFlowInflow,
-  isFlowOutflow
+  isFlowOutflow,
+  isAccountCostMovement
 } from '../utils/nonTickerFinance.ts';
 import { formatDateString } from '../utils.ts';
 import { formatCurrency } from '../App.tsx';
@@ -70,6 +74,9 @@ export interface NonTickerAnalyticsTableProps {
   movements: NonTickerMovement[];
   entities: NonTickerEntity[];
   movementTypeConfigs: NonTickerMovementTypeConfig[];
+  projects?: NonTickerProject[];
+  selectedProjectFilter?: string[];
+  onSelectProjectFilter?: (ids: string[]) => void;
   selectedEntityId: string;
   onSelectEntityId: (id: string) => void;
   selectedCurrency: string;
@@ -97,6 +104,7 @@ export type ColumnKey =
   | 'netReturn'
   | 'fee'
   | 'source'
+  | 'projects'
   | 'notes'
   | 'actions';
 
@@ -115,6 +123,9 @@ export const NonTickerAnalyticsTable: React.FC<NonTickerAnalyticsTableProps> = (
   movements,
   entities,
   movementTypeConfigs,
+  projects = [],
+  selectedProjectFilter,
+  onSelectProjectFilter,
   selectedEntityId,
   onSelectEntityId,
   selectedCurrency,
@@ -142,6 +153,7 @@ export const NonTickerAnalyticsTable: React.FC<NonTickerAnalyticsTableProps> = (
       { key: 'netReturn', label: t.netReturnColumn || 'Rendimento Netto', sortable: true, defaultVisible: true, align: 'right', numeric: true },
       { key: 'fee', label: t.feeColumn || 'Commissioni', sortable: true, defaultVisible: false, align: 'right', numeric: true },
       { key: 'source', label: t.originColumn || 'Provenienza', sortable: true, defaultVisible: true },
+      { key: 'projects', label: t.projectsColumn || 'Progetti', sortable: false, defaultVisible: true },
       { key: 'notes', label: t.notesColumn || 'Note / Rif.', sortable: true, defaultVisible: true },
       { key: 'actions', label: t.actionsColumn || 'Azioni', sortable: false, defaultVisible: true, align: 'right' }
     ],
@@ -223,17 +235,33 @@ export const NonTickerAnalyticsTable: React.FC<NonTickerAnalyticsTableProps> = (
   const [dateTo, setDateTo] = useState<string>('');
   const [selectedTypes, setSelectedTypes] = useState<string[]>([]);
   const [selectedEntityFilter, setSelectedEntityFilter] = useState<string[]>([]);
+  const [internalProjectFilter, setInternalProjectFilter] = useState<string[]>([]);
   const [sourceFilter, setSourceFilter] = useState<'ALL' | 'MANUAL' | 'IMPORTED' | string>('ALL');
   const [flowDirectionFilter, setFlowDirectionFilter] = useState<'ALL' | 'INFLOW' | 'OUTFLOW' | 'RETURN' | 'VALUATION'>('ALL');
+
+  // Filtro progetti effettivo (controllato da prop o interno)
+  const effectiveProjectFilter = useMemo(() => {
+    return selectedProjectFilter !== undefined ? selectedProjectFilter : internalProjectFilter;
+  }, [selectedProjectFilter, internalProjectFilter]);
+
+  const handleUpdateProjectFilter = (newIds: string[]) => {
+    if (onSelectProjectFilter) {
+      onSelectProjectFilter(newIds);
+    } else {
+      setInternalProjectFilter(newIds);
+    }
+  };
 
   // Stati per tendine filtri interattivi
   const [typeDropdownOpen, setTypeDropdownOpen] = useState<boolean>(false);
   const [entityDropdownOpen, setEntityDropdownOpen] = useState<boolean>(false);
+  const [projectDropdownOpen, setProjectDropdownOpen] = useState<boolean>(false);
   const [columnPickerOpen, setColumnPickerOpen] = useState<boolean>(false);
 
   // Refs per chiusura popup al click esterno
   const typeDropdownRef = useRef<HTMLDivElement>(null);
   const entityDropdownRef = useRef<HTMLDivElement>(null);
+  const projectDropdownRef = useRef<HTMLDivElement>(null);
   const columnPickerRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
@@ -243,6 +271,9 @@ export const NonTickerAnalyticsTable: React.FC<NonTickerAnalyticsTableProps> = (
       }
       if (entityDropdownRef.current && !entityDropdownRef.current.contains(e.target as Node)) {
         setEntityDropdownOpen(false);
+      }
+      if (projectDropdownRef.current && !projectDropdownRef.current.contains(e.target as Node)) {
+        setProjectDropdownOpen(false);
       }
       if (columnPickerRef.current && !columnPickerRef.current.contains(e.target as Node)) {
         setColumnPickerOpen(false);
@@ -412,6 +443,13 @@ export const NonTickerAnalyticsTable: React.FC<NonTickerAnalyticsTableProps> = (
         if (!match) return false;
       }
 
+      // 7. Filtro Progetti / Classificazioni
+      if (effectiveProjectFilter.length > 0) {
+        if (!m.projectIds || !m.projectIds.some(pid => effectiveProjectFilter.includes(pid))) {
+          return false;
+        }
+      }
+
       return true;
     });
   }, [
@@ -420,6 +458,7 @@ export const NonTickerAnalyticsTable: React.FC<NonTickerAnalyticsTableProps> = (
     dateFrom,
     dateTo,
     selectedTypes,
+    effectiveProjectFilter,
     flowDirectionFilter,
     sourceFilter,
     searchQuery,
@@ -578,9 +617,12 @@ export const NonTickerAnalyticsTable: React.FC<NonTickerAnalyticsTableProps> = (
         valuationCount++;
       }
 
-      // 4. Commissioni
+      // 4. Commissioni e Oneri di Conto
       if (m.fee && m.fee > 0) {
         totalCommissions += m.fee;
+      }
+      if (isAccountCostMovement(m.type)) {
+        totalCommissions += (m.amount || 0);
       }
     });
 
@@ -630,16 +672,18 @@ export const NonTickerAnalyticsTable: React.FC<NonTickerAnalyticsTableProps> = (
       dateTo ||
       selectedTypes.length > 0 ||
       isEntityFilterActive ||
+      effectiveProjectFilter.length > 0 ||
       sourceFilter !== 'ALL' ||
       flowDirectionFilter !== 'ALL'
     );
-  }, [searchQuery, dateFrom, dateTo, selectedTypes, selectedEntityFilter, selectedEntityId, sourceFilter, flowDirectionFilter]);
+  }, [searchQuery, dateFrom, dateTo, selectedTypes, selectedEntityFilter, selectedEntityId, effectiveProjectFilter, sourceFilter, flowDirectionFilter]);
 
   const handleResetAllFilters = () => {
     setSearchQuery('');
     setDateFrom('');
     setDateTo('');
     setSelectedTypes([]);
+    handleUpdateProjectFilter([]);
     if (selectedEntityId === 'ALL') {
       setSelectedEntityFilter([]);
     }
@@ -929,6 +973,86 @@ export const NonTickerAnalyticsTable: React.FC<NonTickerAnalyticsTableProps> = (
                             className="rounded border-slate-700 bg-slate-950 text-emerald-500 focus:ring-emerald-500/20"
                           />
                           <span className="truncate">{ent.name}</span>
+                        </label>
+                      );
+                    })}
+                  </div>
+                </div>
+              )}
+            </div>
+          )}
+
+          {/* Multi-Select Projects Dropdown (if any project exists) */}
+          {projects && projects.length > 0 && (
+            <div className="relative" ref={projectDropdownRef}>
+              <button
+                type="button"
+                onClick={() => setProjectDropdownOpen(!projectDropdownOpen)}
+                className={`flex items-center gap-1.5 px-3 py-1.5 rounded-xl text-xs font-bold border transition cursor-pointer ${
+                  effectiveProjectFilter.length > 0
+                    ? 'bg-emerald-950/60 text-emerald-300 border-emerald-500/40 shadow-sm'
+                    : 'bg-slate-950/90 text-slate-300 border-slate-800 hover:border-slate-700'
+                }`}
+                title={t.projectFilterLabel || 'Filtra per Progetto'}
+              >
+                <Tag className="w-3 h-3 text-emerald-400" />
+                <span>{t.projectsLabel || 'Progetti'}</span>
+                {effectiveProjectFilter.length > 0 && (
+                  <span className="px-1.5 py-0.2 bg-emerald-500 text-slate-950 text-[10px] font-black rounded-full">
+                    {effectiveProjectFilter.length}
+                  </span>
+                )}
+                <ChevronDown className="w-3 h-3 text-slate-400" />
+              </button>
+
+              {projectDropdownOpen && (
+                <div className="absolute right-0 mt-2 w-64 bg-slate-900 border border-slate-800 rounded-2xl shadow-2xl p-3 z-30 space-y-2 animate-fade-in">
+                  <div className="flex items-center justify-between border-b border-slate-800/80 pb-2 text-xs">
+                    <span className="font-extrabold text-white flex items-center gap-1.5">
+                      <FolderKanban className="w-3.5 h-3.5 text-emerald-400" />
+                      <span>{t.projectsLabel || 'Progetti'}</span>
+                    </span>
+                    <button
+                      type="button"
+                      onClick={() => handleUpdateProjectFilter([])}
+                      className="text-slate-400 hover:text-white underline text-[10px] cursor-pointer"
+                    >
+                      {t.allProjectsOption || 'Tutti'}
+                    </button>
+                  </div>
+
+                  <div className="max-h-56 overflow-y-auto custom-scrollbar space-y-1 text-xs">
+                    {projects.map(prj => {
+                      const isChecked = effectiveProjectFilter.includes(prj.id);
+                      return (
+                        <label
+                          key={prj.id}
+                          className="flex items-center justify-between gap-2 p-1.5 rounded-lg hover:bg-slate-800/60 cursor-pointer text-slate-300 hover:text-white select-none transition"
+                        >
+                          <div className="flex items-center gap-2 truncate">
+                            <input
+                              type="checkbox"
+                              checked={isChecked}
+                              onChange={() => {
+                                if (isChecked) {
+                                  handleUpdateProjectFilter(effectiveProjectFilter.filter(id => id !== prj.id));
+                                } else {
+                                  handleUpdateProjectFilter([...effectiveProjectFilter, prj.id]);
+                                }
+                              }}
+                              className="rounded border-slate-700 bg-slate-950 text-emerald-500 focus:ring-emerald-500/20"
+                            />
+                            <span
+                              className="w-2.5 h-2.5 rounded-full shrink-0"
+                              style={{ backgroundColor: prj.color || '#10b981' }}
+                            />
+                            <span className="truncate">{prj.name}</span>
+                          </div>
+                          {prj.isArchived && (
+                            <span className="text-[9px] px-1.5 py-0.2 bg-slate-800 text-slate-400 rounded border border-slate-700">
+                              {t.archivedBadge || 'Archiv.'}
+                            </span>
+                          )}
                         </label>
                       );
                     })}
@@ -1253,7 +1377,38 @@ export const NonTickerAnalyticsTable: React.FC<NonTickerAnalyticsTableProps> = (
                       <td className="py-2.5 px-3 whitespace-nowrap">{renderSourceBadge(m)}</td>
                     )}
 
-                    {/* 13. Notes & References */}
+                    {/* 13. Projects / Classifications */}
+                    {visibleColumns.includes('projects') && (
+                      <td className="py-2.5 px-3 whitespace-nowrap">
+                        {m.projectIds && m.projectIds.length > 0 ? (
+                          <div className="flex flex-wrap gap-1 max-w-[170px]">
+                            {m.projectIds.map(pid => {
+                              const prj = (projects || []).find(p => p.id === pid);
+                              if (!prj) return null;
+                              return (
+                                <span
+                                  key={pid}
+                                  className="inline-flex items-center gap-1 text-[10px] font-semibold px-2 py-0.5 rounded-md border font-sans"
+                                  style={{
+                                    backgroundColor: prj.color ? `${prj.color}20` : '#10b98120',
+                                    borderColor: prj.color ? `${prj.color}50` : '#10b98150',
+                                    color: prj.color || '#34d399'
+                                  }}
+                                  title={`${prj.name}${prj.isArchived ? ` (${t.archivedBadge || 'Archiviato'})` : ''}`}
+                                >
+                                  <Tag className="w-2.5 h-2.5" />
+                                  <span className="truncate max-w-[90px]">{prj.name}</span>
+                                </span>
+                              );
+                            })}
+                          </div>
+                        ) : (
+                          <span className="text-slate-600">—</span>
+                        )}
+                      </td>
+                    )}
+
+                    {/* 14. Notes & References */}
                     {visibleColumns.includes('notes') && (
                       <td className="py-2.5 px-3 text-slate-400 max-w-[180px] truncate" title={m.notes}>
                         {m.notes || '—'}

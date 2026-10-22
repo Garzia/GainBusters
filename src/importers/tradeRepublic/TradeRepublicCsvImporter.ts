@@ -420,6 +420,81 @@ export class TradeRepublicCsvImporter implements NonTickerImporter {
         };
         totalOutflows = cleanFloatNoise(totalOutflows + amt);
 
+      } else if (
+        rawType === 'TAX_OPTIMIZATION' ||
+        rawType === 'STAMP_DUTY' ||
+        rawType === 'STAMP_DUTY_TAX' ||
+        rawType === 'TAX' ||
+        rawType === 'TAX_ADJUSTMENT' ||
+        rawCategory === 'TAX'
+      ) {
+        // Gestione Imposte di Bollo e Ottimizzazioni Fiscali (Trade Republic)
+        // Nel CSV Trade Republic:
+        // 'amount' è spesso "0.000000" e la trattenuta effettiva è registrata in 'tax' (es. -0.50 o -5.40).
+        // Se 'tax' è assente o 0, si valuta 'amount'.
+        const effectiveTaxAmount = Math.abs(rawTax) > 0.00001 ? Math.abs(rawTax) : Math.abs(rawAmount);
+        const amt = cleanFloatNoise(effectiveTaxAmount);
+
+        if (amt <= 0.00001) {
+          isSupported = false;
+          skipReason = "Importo dell'imposta o rettifica fiscale pari a 0.";
+        } else {
+          const descLower = (rawDescription || '').toLowerCase();
+          const isPortfolioTax =
+            descLower.includes('portfolio') ||
+            descLower.includes('portafoglio') ||
+            descLower.includes('dossier') ||
+            descLower.includes('titoli') ||
+            descLower.includes('securities');
+
+          const isPositiveRefund = (rawTax > 0 && rawAmount >= 0) || (rawAmount > 0 && rawTax >= 0);
+
+          if (isPositiveRefund) {
+            // Accredito / Storno d'imposta a favore dell'utente (Flusso in entrata)
+            itemPayload = {
+              externalId: rawTxId,
+              date,
+              type: NonTickerMovementType.OTHER_INFLOW,
+              amount: amt,
+              notes: rawDescription || 'Rimborso / accredito fiscale Trade Republic',
+              importProvider: this.id,
+              rawType,
+              rawRow: row
+            };
+            totalInflows = cleanFloatNoise(totalInflows + amt);
+          } else if (isPortfolioTax) {
+            // 1. Stamp Duty Tax (Portfolio): Imposta di bollo sul dossier titoli esterno,
+            // addebitata come uscita effettiva di cassa dal conto liquidità.
+            itemPayload = {
+              externalId: rawTxId,
+              date,
+              type: NonTickerMovementType.STAMP_DUTY_PORTFOLIO,
+              amount: amt,
+              notes: rawDescription || 'Imposta di Bollo (Portafoglio Titoli)',
+              importProvider: this.id,
+              rawType,
+              rawRow: row
+            };
+            totalOutflows = cleanFloatNoise(totalOutflows + amt);
+          } else {
+            // 2. Stamp Duty Tax (Cash): Imposta di bollo sul conto liquidità stesso.
+            // Registrata come uscita effettiva, concorre alle spese e imposte complessive del conto
+            // e interagisce coerentemente con lo switch "Includi/Escludi commissioni".
+            itemPayload = {
+              externalId: rawTxId,
+              date,
+              type: NonTickerMovementType.STAMP_DUTY_CASH,
+              amount: amt,
+              notes: rawDescription || 'Imposta di Bollo (Liquidità / Conto)',
+              importProvider: this.id,
+              rawType,
+              rawRow: row
+            };
+            totalOutflows = cleanFloatNoise(totalOutflows + amt);
+            totalTaxes = cleanFloatNoise(totalTaxes + amt);
+          }
+        }
+
       } else {
         // Tipologia non direttamente gestita o ignota
         isSupported = false;

@@ -134,3 +134,18 @@ Il file CSV generato da Trade Republic viene mappato secondo lo standard delle *
 | `type: BENEFITS_SAVEBACK` | Flusso Entrata (+) | `CASHBACK` (Cashback / Saveback / Bonus) | Accredito bonus o saveback. |
 | `type: BENEFITS_ROUNDUP` | In/Out | `OTHER_OUTFLOW` / `CASHBACK` | Arrotondamento investito o bonus accumulato. |
 | `type: FEE` / `CUSTODY_FEE` | Flusso Uscita (-) | `FEE` (Canone / Spese di Gestione) | Oneri o costi fissi del conto. |
+| `type: TAX_OPTIMIZATION` (descr. `Portfolio`) | Flusso Uscita (-) | `STAMP_DUTY_PORTFOLIO` (Imposta di Bollo Portafoglio Titoli) | Bollo 0,20% sul dossier titoli esterno addebitato sul conto liquidità. Registrato come uscita effettiva con tipologia isolata e filtrabile. Non penalizza la performance intrinseca della liquidità. |
+| `type: TAX_OPTIMIZATION` (descr. `Cash` o conto) | Flusso Uscita (-) | `STAMP_DUTY_CASH` (Imposta di Bollo Liquidità / Conto) | Imposta di bollo sul conto liquidità stesso. Registrata come uscita effettiva: incide sulle spese e imposte complessive (`totalCommissions`) e risponde coerentemente allo switch "Includi/Escludi commissioni" (dedotta dal guadagno netto quando attivo, ripristinata a lordo quando disattivo). |
+| `type: TAX_OPTIMIZATION` (a credito / rimborso) | Flusso Entrata (+) | `OTHER_INFLOW` (Altro Flusso in Entrata) | Rimborso / storno fiscale a credito dell'utente. |
+
+---
+
+## 6. Trattamento Fiscale e Finanziario delle Spese e Imposte di Conto
+
+Nel modulo **Attività senza ticker**, le imposte e i costi addebitati sul saldo (ad es. `STAMP_DUTY_CASH` e `FEE`) seguono le medesime logiche adottate da GainBusters per gli strumenti con ticker:
+1. **Addebito Reale di Liquidità**: L'importo addebitato riduce il saldo disponibile del conto (`runningBalance -= amt`) e figura tra le uscite effettive della tabella e dei riepiloghi.
+2. **Spese e Imposte Complessive**: Il valore concorre all'aggregato `metrics.totalCommissions` ("Spese e Imposte Complessive"), garantendo piena visibilità e trasparenza all'utente.
+3. **Switch Includi/Escludi Commissioni**:
+   - **Includi commissioni / spese**: Il guadagno netto (`netGain`) recepisce la deduzione della spesa di conto, mostrando il profitto effettivo al netto di imposte e canoni. Nel calcolo MWRR non viene generato un falso flusso positivo verso l'investitore, rispecchiando fedelmente il rendimento ponderato per il denaro.
+   - **Escludi commissioni / spese**: Il guadagno netto (`netGain`) mostra la redditività intrinseca del capitale investito al lordo delle imposte di conto e delle commissioni, senza doppie contabilizzazioni.
+4. **Imposta di Bollo Portfolio vs Cash**: Il bollo titoli (`STAMP_DUTY_PORTFOLIO`) rappresenta una fuoriuscita di liquidità per far fronte agli oneri fiscali del dossier titoli: viene perciò registrato come uscita di capitale autonoma, filtrabile nella tabella analitica ma distinta dai costi di tenuta della liquidità.

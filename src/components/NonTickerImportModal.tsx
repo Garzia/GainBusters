@@ -40,6 +40,7 @@ import {
   NonTickerMovementType,
   LanguagePhrases
 } from '../types.ts';
+import { isFlowOutflow } from '../utils/nonTickerFinance.ts';
 import {
   getAllImporters,
   getImporterById,
@@ -632,10 +633,9 @@ export const NonTickerImportModal: React.FC<NonTickerImportModalProps> = ({
                                 <span className="text-emerald-400">
                                   +{formatCurrency(item.netReturn, targetCurrency)} netto
                                 </span>
-                              ) : item?.type === NonTickerMovementType.WITHDRAWAL ||
-                                item?.type === NonTickerMovementType.OTHER_OUTFLOW ? (
+                              ) : isFlowOutflow(item?.type || '') ? (
                                 <span className="text-rose-400">
-                                  -{formatCurrency(item.amount || 0, targetCurrency)}
+                                  -{formatCurrency(item?.amount || 0, targetCurrency)}
                                 </span>
                               ) : item?.amount ? (
                                 <span className="text-sky-400">

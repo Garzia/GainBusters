@@ -49,7 +49,13 @@ import {
   RefreshCw,
   Coins,
   Calendar,
-  FileUp
+  FileUp,
+  Tag,
+  FolderKanban,
+  Archive,
+  ArchiveRestore,
+  Check,
+  Palette
 } from 'lucide-react';
 import {
   DBState,
@@ -60,7 +66,8 @@ import {
   NonTickerMovementTypeConfig,
   NonTickerCategory,
   Currency,
-  NonTickerTablePreferences
+  NonTickerTablePreferences,
+  NonTickerProject
 } from '../types.ts';
 import {
   calculateNonTickerMetrics,
@@ -88,6 +95,19 @@ interface NonTickerAssetsPageProps {
   lang: string;
   activeCurrencies?: Currency[];
 }
+
+const PROJECT_PALETTE = [
+  '#10b981', // emerald
+  '#0ea5e9', // sky
+  '#6366f1', // indigo
+  '#8b5cf6', // purple
+  '#ec4899', // pink
+  '#f43f5e', // rose
+  '#f59e0b', // amber
+  '#14b8a6', // teal
+  '#84cc16', // lime
+  '#64748b'  // slate
+];
 
 export const NonTickerAssetsPage: React.FC<NonTickerAssetsPageProps> = ({
   db,
@@ -127,11 +147,47 @@ export const NonTickerAssetsPage: React.FC<NonTickerAssetsPageProps> = ({
   // Selected Entity state: 'ALL' or specific entity id
   const [selectedEntityId, setSelectedEntityId] = useState<string>('ALL');
 
-  // Timeframe filter for chart & period analysis: 1M, 3M, 6M, 1Y, 3Y, 5Y, YTD, ALL, CUSTOM
-  type NonTickerTimeframe = '1M' | '3M' | '6M' | '1Y' | '3Y' | '5Y' | 'YTD' | 'ALL' | 'CUSTOM';
+  // Transversal Projects / Classifications state
+  const projects = useMemo<NonTickerProject[]>(() => db.nonTickerProjects || [], [db.nonTickerProjects]);
+  const activeProjects = useMemo(() => projects.filter(p => !p.isArchived), [projects]);
+  const archivedProjects = useMemo(() => projects.filter(p => p.isArchived), [projects]);
+
+  // Project filtering in Analysis Perimeter
+  const [selectedProjectIds, setSelectedProjectIds] = useState<string[]>([]);
+  const [showArchivedProjectsInFilter, setShowArchivedProjectsInFilter] = useState<boolean>(false);
+
+  // Manage projects modal state
+  const [manageProjectsModalOpen, setManageProjectsModalOpen] = useState<boolean>(false);
+  const [manageProjectsTab, setManageProjectsTab] = useState<'ACTIVE' | 'ARCHIVED'>('ACTIVE');
+  const [editingProjectId, setEditingProjectId] = useState<string | null>(null);
+  const [projectInput, setProjectInput] = useState<{
+    name: string;
+    description: string;
+    color: string;
+  }>({
+    name: '',
+    description: '',
+    color: '#10b981'
+  });
+  const [quickProjectName, setQuickProjectName] = useState<string>('');
+  const [projectToDeleteConfirm, setProjectToDeleteConfirm] = useState<{
+    id: string;
+    name: string;
+  } | null>(null);
+
+  // Timeframe filter for chart & period analysis: CURRENT_MONTH, PREVIOUS_MONTH, 1M, 3M, 6M, 1Y, 3Y, 5Y, YTD, ALL, CUSTOM
+  type NonTickerTimeframe = 'CURRENT_MONTH' | 'PREVIOUS_MONTH' | '1M' | '3M' | '6M' | '1Y' | '3Y' | '5Y' | 'YTD' | 'ALL' | 'CUSTOM';
   const [timeframe, setTimeframe] = useState<NonTickerTimeframe>('ALL');
   const [customStartDate, setCustomStartDate] = useState<string>('');
   const [customEndDate, setCustomEndDate] = useState<string>('');
+
+  // Format local date YYYY-MM-DD
+  const formatLocalDate = (d: Date): string => {
+    const year = d.getFullYear();
+    const month = String(d.getMonth() + 1).padStart(2, '0');
+    const day = String(d.getDate()).padStart(2, '0');
+    return `${year}-${month}-${day}`;
+  };
 
   // Commissions toggle (default from settings if available, else true)
   const [includeCommissions, setIncludeCommissions] = useState<boolean>(
@@ -178,6 +234,7 @@ export const NonTickerAssetsPage: React.FC<NonTickerAssetsPageProps> = ({
     netReturn: string;
     isReinvested: boolean;
     notes: string;
+    projectIds: string[];
   }>({
     open: false,
     editId: null,
@@ -194,7 +251,8 @@ export const NonTickerAssetsPage: React.FC<NonTickerAssetsPageProps> = ({
     taxAmount: '',
     netReturn: '',
     isReinvested: true,
-    notes: ''
+    notes: '',
+    projectIds: []
   });
 
   const [deleteConfirm, setDeleteConfirm] = useState<{
@@ -238,10 +296,52 @@ export const NonTickerAssetsPage: React.FC<NonTickerAssetsPageProps> = ({
     );
   }, [selectedEntityId, entities, movements, selectedCurrency, movementTypeConfigs, includeCommissions]);
 
+  // Project Summary KPIs (deduplicated across multiple selected projects)
+  const projectMetrics = useMemo(() => {
+    if (selectedProjectIds.length === 0) return null;
+
+    // Filter movements by current entity scope AND matching any of the selected project IDs
+    const matchingMovements = movements.filter(m => {
+      if (selectedEntityId !== 'ALL' && m.entityId !== selectedEntityId) return false;
+      return m.projectIds && m.projectIds.some(pid => selectedProjectIds.includes(pid));
+    });
+
+    let totalInflows = 0;
+    let totalOutflows = 0;
+
+    // STRICT DEDUPLICATION:
+    // Every movement is processed exactly ONCE, even if tagged with multiple selected projects!
+    for (const m of matchingMovements) {
+      if (isFlowInflow(m.type, movementTypeConfigs)) {
+        totalInflows += (m.amount || 0);
+      } else if (isFlowOutflow(m.type, movementTypeConfigs)) {
+        totalOutflows += (m.amount || 0);
+      } else if (m.type === NonTickerMovementType.RETURN) {
+        const g = m.grossReturn || 0;
+        const tax = m.taxAmount || 0;
+        const net = m.netReturn !== undefined ? m.netReturn : Math.max(0, g - tax);
+        totalInflows += net;
+      }
+      if (m.fee && m.fee > 0) {
+        totalOutflows += m.fee;
+      }
+    }
+
+    const netBalance = totalInflows - totalOutflows;
+
+    return {
+      totalInflows,
+      totalOutflows,
+      netBalance,
+      movementCount: matchingMovements.length,
+      selectedProjects: projects.filter(p => selectedProjectIds.includes(p.id))
+    };
+  }, [selectedProjectIds, movements, selectedEntityId, movementTypeConfigs, projects]);
+
   // Determine period boundaries
   const { periodStartDate, periodEndDate } = useMemo(() => {
     const now = new Date();
-    const todayStr = now.toISOString().substring(0, 10);
+    const todayStr = formatLocalDate(now);
 
     if (timeframe === 'ALL') {
       return {
@@ -254,6 +354,25 @@ export const NonTickerAssetsPage: React.FC<NonTickerAssetsPageProps> = ({
       return {
         periodStartDate: customStartDate || metrics.firstDate || todayStr,
         periodEndDate: customEndDate || todayStr
+      };
+    }
+
+    // Mese corrente: dal primo giorno del mese corrente alla data odierna inclusa
+    if (timeframe === 'CURRENT_MONTH') {
+      const curStart = new Date(now.getFullYear(), now.getMonth(), 1);
+      return {
+        periodStartDate: formatLocalDate(curStart),
+        periodEndDate: todayStr
+      };
+    }
+
+    // Mese precedente: dal primo all'ultimo giorno del mese precedente (gestendo correttamente bisestili e cambi d'anno)
+    if (timeframe === 'PREVIOUS_MONTH') {
+      const prevStart = new Date(now.getFullYear(), now.getMonth() - 1, 1);
+      const prevEnd = new Date(now.getFullYear(), now.getMonth(), 0);
+      return {
+        periodStartDate: formatLocalDate(prevStart),
+        periodEndDate: formatLocalDate(prevEnd)
       };
     }
 
@@ -275,7 +394,7 @@ export const NonTickerAssetsPage: React.FC<NonTickerAssetsPageProps> = ({
     }
 
     return {
-      periodStartDate: start.toISOString().substring(0, 10),
+      periodStartDate: formatLocalDate(start),
       periodEndDate: todayStr
     };
   }, [timeframe, customStartDate, customEndDate, metrics.firstDate]);
@@ -353,6 +472,12 @@ export const NonTickerAssetsPage: React.FC<NonTickerAssetsPageProps> = ({
       case 'ar': return `${totalDays} يوم`;
       default: return `${totalDays} days`;
     }
+  };
+
+  const getTimeframeDisplayLabel = (tf: NonTickerTimeframe): string => {
+    if (tf === 'CURRENT_MONTH') return t.timeframeCurrentMonth || 'Mese corr.';
+    if (tf === 'PREVIOUS_MONTH') return t.timeframePreviousMonth || 'Mese prec.';
+    return tf;
   };
 
   // Movements within selected period for breakdown & tax analysis
@@ -551,6 +676,10 @@ export const NonTickerAssetsPage: React.FC<NonTickerAssetsPageProps> = ({
         return t.mvInvestment || 'Investimento / Acquisto Titoli';
       case NonTickerMovementType.CARD_SPEND:
         return t.mvCardSpend || 'Spesa con Carta';
+      case NonTickerMovementType.STAMP_DUTY_PORTFOLIO:
+        return t.mvStampDutyPortfolio || 'Imposta di Bollo (Portafoglio Titoli)';
+      case NonTickerMovementType.STAMP_DUTY_CASH:
+        return t.mvStampDutyCash || 'Imposta di Bollo (Liquidità / Conto)';
       case NonTickerMovementType.FEE:
         return t.mvFee || 'Canone / Spese di Gestione';
       case NonTickerMovementType.OTHER_INFLOW:
@@ -703,7 +832,8 @@ export const NonTickerAssetsPage: React.FC<NonTickerAssetsPageProps> = ({
       taxAmount: '',
       netReturn: '',
       isReinvested: true,
-      notes: ''
+      notes: '',
+      projectIds: selectedProjectIds.length > 0 ? [...selectedProjectIds] : []
     });
   };
 
@@ -728,7 +858,8 @@ export const NonTickerAssetsPage: React.FC<NonTickerAssetsPageProps> = ({
       taxAmount: m.taxAmount !== undefined ? m.taxAmount.toString() : '',
       netReturn: m.netReturn !== undefined ? m.netReturn.toString() : '',
       isReinvested: m.isReinvested !== false,
-      notes: m.notes || ''
+      notes: m.notes || '',
+      projectIds: m.projectIds ? [...m.projectIds] : []
     });
   };
 
@@ -747,7 +878,8 @@ export const NonTickerAssetsPage: React.FC<NonTickerAssetsPageProps> = ({
       entityId: movementForm.entityId,
       date: movementForm.date || new Date().toISOString().substring(0, 10),
       type: movementType,
-      notes: movementForm.notes.trim() || undefined
+      notes: movementForm.notes.trim() || undefined,
+      projectIds: movementForm.projectIds.length > 0 ? movementForm.projectIds : undefined
     };
 
     // Optional units handling
@@ -860,6 +992,116 @@ export const NonTickerAssetsPage: React.FC<NonTickerAssetsPageProps> = ({
       await saveDatabaseState(updatedDb);
     }
     setDeleteConfirm({ open: false, type: 'entity', id: '', name: '' });
+  };
+
+  // ================= PROJECT MANAGEMENT CRUD HANDLERS =================
+  const handleSaveProject = async (e: React.FormEvent) => {
+    e.preventDefault();
+    const trimmedName = projectInput.name.trim();
+    if (!trimmedName) return;
+
+    let updatedProjects: NonTickerProject[];
+    if (editingProjectId) {
+      updatedProjects = projects.map(p =>
+        p.id === editingProjectId
+          ? {
+              ...p,
+              name: trimmedName,
+              description: projectInput.description.trim() || undefined,
+              color: projectInput.color || '#10b981',
+              updatedAt: new Date().toISOString()
+            }
+          : p
+      );
+    } else {
+      const newProj: NonTickerProject = {
+        id: `proj-${Date.now()}-${Math.random().toString(36).substr(2, 5)}`,
+        name: trimmedName,
+        description: projectInput.description.trim() || undefined,
+        color: projectInput.color || '#10b981',
+        isArchived: false,
+        createdAt: new Date().toISOString()
+      };
+      updatedProjects = [...projects, newProj];
+    }
+
+    const updatedDb: DBState = {
+      ...db,
+      nonTickerProjects: updatedProjects
+    };
+
+    await saveDatabaseState(updatedDb);
+    setEditingProjectId(null);
+    setProjectInput({ name: '', description: '', color: '#10b981' });
+  };
+
+  const handleArchiveProject = async (id: string, isArchived: boolean) => {
+    const updatedProjects = projects.map(p =>
+      p.id === id ? { ...p, isArchived, updatedAt: new Date().toISOString() } : p
+    );
+    const updatedDb: DBState = {
+      ...db,
+      nonTickerProjects: updatedProjects
+    };
+    await saveDatabaseState(updatedDb);
+  };
+
+  const handleDeleteProject = (id: string) => {
+    const projToDelete = projects.find(p => p.id === id);
+    if (!projToDelete) return;
+    setProjectToDeleteConfirm({ id: projToDelete.id, name: projToDelete.name });
+  };
+
+  const executeDeleteProject = async (id: string) => {
+    const projToDelete = projects.find(p => p.id === id);
+    if (!projToDelete) return;
+
+    const updatedProjects = projects.filter(p => p.id !== id);
+    // Remove project id from all movements without modifying or deleting movements
+    const updatedMovements = movements.map(m => {
+      if (m.projectIds && m.projectIds.includes(id)) {
+        const remaining = m.projectIds.filter(pid => pid !== id);
+        return {
+          ...m,
+          projectIds: remaining.length > 0 ? remaining : undefined
+        };
+      }
+      return m;
+    });
+
+    if (selectedProjectIds.includes(id)) {
+      setSelectedProjectIds(selectedProjectIds.filter(pid => pid !== id));
+    }
+
+    const updatedDb: DBState = {
+      ...db,
+      nonTickerProjects: updatedProjects,
+      nonTickerMovements: updatedMovements
+    };
+    await saveDatabaseState(updatedDb);
+    if (editingProjectId === id) {
+      setEditingProjectId(null);
+      setProjectInput({ name: '', description: '', color: '#10b981' });
+    }
+  };
+
+  const handleQuickCreateProject = async (name: string, color: string = '#10b981'): Promise<string> => {
+    const trimmed = name.trim();
+    if (!trimmed) return '';
+    const newProj: NonTickerProject = {
+      id: `proj-${Date.now()}-${Math.random().toString(36).substr(2, 5)}`,
+      name: trimmed,
+      color,
+      isArchived: false,
+      createdAt: new Date().toISOString()
+    };
+    const updatedProjects = [...projects, newProj];
+    const updatedDb: DBState = {
+      ...db,
+      nonTickerProjects: updatedProjects
+    };
+    await saveDatabaseState(updatedDb);
+    return newProj.id;
   };
 
   // Movement Types Manager Helpers
@@ -1189,6 +1431,153 @@ export const NonTickerAssetsPage: React.FC<NonTickerAssetsPageProps> = ({
               )}
             </div>
           )}
+
+          {/* Transversal Project / Tag Filter within Analysis Perimeter */}
+          <div className="pt-3.5 border-t border-slate-800/60 space-y-2.5">
+            <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2">
+              <div className="flex items-center gap-2">
+                <FolderKanban className="w-3.5 h-3.5 text-emerald-400" />
+                <span className="text-xs font-bold text-slate-300">
+                  {t.projectFilterLabel || 'Classificazione per Progetto / Finalità:'}
+                </span>
+                {selectedProjectIds.length > 0 && (
+                  <span className="text-[10px] px-2 py-0.2 rounded-full bg-emerald-500/20 text-emerald-300 border border-emerald-500/30 font-mono font-bold">
+                    {selectedProjectIds.length} {selectedProjectIds.length === 1 ? 'selezionato' : 'selezionati'}
+                  </span>
+                )}
+              </div>
+
+              <div className="flex items-center gap-3">
+                {archivedProjects.length > 0 && (
+                  <button
+                    type="button"
+                    onClick={() => setShowArchivedProjectsInFilter(!showArchivedProjectsInFilter)}
+                    className="text-[11px] text-slate-400 hover:text-slate-200 flex items-center gap-1 cursor-pointer transition"
+                  >
+                    <Archive className="w-3 h-3" />
+                    <span>
+                      {showArchivedProjectsInFilter
+                        ? (t.hideArchivedProjects || 'Nascondi archiviati')
+                        : `${t.showArchivedProjects || 'Mostra archiviati'} (${archivedProjects.length})`}
+                    </span>
+                  </button>
+                )}
+
+                <button
+                  type="button"
+                  onClick={() => setManageProjectsModalOpen(true)}
+                  className="text-xs text-emerald-400 hover:text-emerald-300 font-bold flex items-center gap-1.5 cursor-pointer hover:underline transition"
+                >
+                  <Sliders className="w-3 h-3" />
+                  <span>{t.manageProjectsBtn || 'Gestisci Progetti'}</span>
+                </button>
+              </div>
+            </div>
+
+            {/* Project Filter Pills */}
+            <div className="flex flex-wrap items-center gap-1.5 pt-0.5">
+              {/* All Projects button */}
+              <button
+                type="button"
+                onClick={() => setSelectedProjectIds([])}
+                className={`px-3 py-1 rounded-xl text-xs font-bold transition cursor-pointer flex items-center gap-1.5 border ${
+                  selectedProjectIds.length === 0
+                    ? 'bg-emerald-600 text-white border-emerald-500 shadow-sm'
+                    : 'bg-slate-950/70 border-slate-800 text-slate-400 hover:text-white'
+                }`}
+              >
+                <span>{t.allProjectsOption || 'Tutti i movimenti'}</span>
+              </button>
+
+              {/* Active Projects */}
+              {activeProjects.map(proj => {
+                const isSelected = selectedProjectIds.includes(proj.id);
+                const count = movements.filter(m => m.projectIds?.includes(proj.id)).length;
+                return (
+                  <button
+                    key={proj.id}
+                    type="button"
+                    onClick={() => {
+                      if (isSelected) {
+                        setSelectedProjectIds(selectedProjectIds.filter(id => id !== proj.id));
+                      } else {
+                        setSelectedProjectIds([...selectedProjectIds, proj.id]);
+                      }
+                    }}
+                    className={`px-2.5 py-1 rounded-xl text-xs font-bold transition cursor-pointer flex items-center gap-1.5 border ${
+                      isSelected
+                        ? 'bg-slate-800 text-white shadow-sm ring-1 ring-emerald-500/50'
+                        : 'bg-slate-950/70 border-slate-800 text-slate-400 hover:text-white'
+                    }`}
+                    style={
+                      isSelected
+                        ? {
+                            borderColor: proj.color || '#10b981',
+                            backgroundColor: proj.color ? `${proj.color}25` : '#10b98125'
+                          }
+                        : {}
+                    }
+                  >
+                    <span
+                      className="w-2 h-2 rounded-full shrink-0"
+                      style={{ backgroundColor: proj.color || '#10b981' }}
+                    />
+                    <span>{proj.name}</span>
+                    <span className="text-[10px] opacity-60 font-mono">({count})</span>
+                  </button>
+                );
+              })}
+
+              {/* Archived projects if toggled on */}
+              {showArchivedProjectsInFilter &&
+                archivedProjects.map(proj => {
+                  const isSelected = selectedProjectIds.includes(proj.id);
+                  const count = movements.filter(m => m.projectIds?.includes(proj.id)).length;
+                  return (
+                    <button
+                      key={proj.id}
+                      type="button"
+                      onClick={() => {
+                        if (isSelected) {
+                          setSelectedProjectIds(selectedProjectIds.filter(id => id !== proj.id));
+                        } else {
+                          setSelectedProjectIds([...selectedProjectIds, proj.id]);
+                        }
+                      }}
+                      className={`px-2.5 py-1 rounded-xl text-xs font-bold transition cursor-pointer flex items-center gap-1.5 border border-dashed opacity-80 ${
+                        isSelected
+                          ? 'bg-slate-800 text-white shadow-sm ring-1 ring-amber-500/50'
+                          : 'bg-slate-950/70 border-slate-700 text-slate-400 hover:text-white'
+                      }`}
+                      style={
+                        isSelected
+                          ? {
+                              borderColor: proj.color || '#f59e0b',
+                              backgroundColor: proj.color ? `${proj.color}25` : '#f59e0b25'
+                            }
+                          : {}
+                      }
+                    >
+                      <span
+                        className="w-2 h-2 rounded-full shrink-0"
+                        style={{ backgroundColor: proj.color || '#f59e0b' }}
+                      />
+                      <span>{proj.name}</span>
+                      <span className="text-[9px] px-1 py-0.2 rounded bg-slate-900 border border-slate-700 text-slate-400">
+                        {t.archivedBadge || 'Archiv.'}
+                      </span>
+                      <span className="text-[10px] opacity-60 font-mono">({count})</span>
+                    </button>
+                  );
+                })}
+
+              {projects.length === 0 && (
+                <span className="text-xs text-slate-500 italic py-1">
+                  {t.noProjectsConfigured || 'Nessun progetto creato. Clicca su "Gestisci Progetti" per creare la prima finalità.'}
+                </span>
+              )}
+            </div>
+          </div>
         </div>
       ) : (
         /* Empty State */
@@ -1212,6 +1601,93 @@ export const NonTickerAssetsPage: React.FC<NonTickerAssetsPageProps> = ({
           >
             {t.addFirstEntityBtn || t.newEntityBtn || 'Aggiungi la prima entità'}
           </button>
+        </div>
+      )}
+
+      {/* ================= DEDICATED SELECTED PROJECTS SUMMARY (DEDUPLICATED AGGREGATE) ================= */}
+      {projectMetrics && (
+        <div className="bg-gradient-to-br from-slate-900/95 via-slate-900/70 to-emerald-950/20 border border-emerald-500/30 p-4 sm:p-5 rounded-3xl space-y-3.5 backdrop-blur-md shadow-xl animate-fade-in">
+          <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2 border-b border-slate-800/80 pb-3">
+            <div className="flex items-center gap-2.5">
+              <span className="p-2 bg-emerald-500/10 text-emerald-400 rounded-xl border border-emerald-500/20">
+                <FolderKanban className="w-4 h-4" />
+              </span>
+              <div>
+                <h4 className="font-extrabold text-sm text-white flex items-center gap-2 flex-wrap">
+                  <span>{t.projectSummaryTitle || 'Riepilogo Progetti Selezionati'}</span>
+                  <div className="flex items-center gap-1">
+                    {projectMetrics.selectedProjects.map(p => (
+                      <span
+                        key={p.id}
+                        className="text-[10px] px-2 py-0.5 rounded-full font-mono font-bold border"
+                        style={{
+                          backgroundColor: p.color ? `${p.color}25` : '#10b98125',
+                          borderColor: p.color ? `${p.color}50` : '#10b98150',
+                          color: p.color || '#34d399'
+                        }}
+                      >
+                        {p.name}
+                      </span>
+                    ))}
+                  </div>
+                </h4>
+                <p className="text-[11px] text-slate-400 mt-0.5">
+                  {projectMetrics.movementCount} {t.projectMovementsCount || 'movimenti associati'} —{' '}
+                  <span className="text-slate-300 font-medium">
+                    conteggiati una sola volta per i movimenti condivisi tra più progetti
+                  </span>
+                </p>
+              </div>
+            </div>
+
+            <button
+              type="button"
+              onClick={() => setSelectedProjectIds([])}
+              className="text-xs text-slate-400 hover:text-white underline cursor-pointer self-start sm:self-auto"
+            >
+              Rimuovi filtro progetti
+            </button>
+          </div>
+
+          <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+            {/* Totale Entrate */}
+            <div className="bg-slate-950/70 border border-slate-800/80 p-3.5 rounded-2xl">
+              <div className="text-[11px] text-slate-400 font-semibold mb-1 flex items-center justify-between">
+                <span>{t.projectInflowsSum || 'Totale Entrate Progetti'}</span>
+                <ArrowUpRight className="w-3.5 h-3.5 text-sky-400" />
+              </div>
+              <div className="text-lg sm:text-xl font-black text-sky-400 font-mono tracking-tight">
+                +{formatCurrency(projectMetrics.totalInflows, selectedCurrency)}
+              </div>
+            </div>
+
+            {/* Totale Uscite */}
+            <div className="bg-slate-950/70 border border-slate-800/80 p-3.5 rounded-2xl">
+              <div className="text-[11px] text-slate-400 font-semibold mb-1 flex items-center justify-between">
+                <span>{t.projectOutflowsSum || 'Totale Uscite Progetti'}</span>
+                <ArrowDownRight className="w-3.5 h-3.5 text-rose-400" />
+              </div>
+              <div className="text-lg sm:text-xl font-black text-rose-400 font-mono tracking-tight">
+                -{formatCurrency(projectMetrics.totalOutflows, selectedCurrency)}
+              </div>
+            </div>
+
+            {/* Saldo Netto Risultante */}
+            <div className="bg-slate-950/70 border border-slate-800/80 p-3.5 rounded-2xl">
+              <div className="text-[11px] text-slate-400 font-semibold mb-1 flex items-center justify-between">
+                <span>{t.projectNetBalance || 'Saldo Netto Flussi'}</span>
+                <TrendingUp className={`w-3.5 h-3.5 ${projectMetrics.netBalance >= 0 ? 'text-emerald-400' : 'text-rose-400'}`} />
+              </div>
+              <div
+                className={`text-lg sm:text-xl font-black font-mono tracking-tight ${
+                  projectMetrics.netBalance >= 0 ? 'text-emerald-400' : 'text-rose-400'
+                }`}
+              >
+                {projectMetrics.netBalance >= 0 ? '+' : ''}
+                {formatCurrency(projectMetrics.netBalance, selectedCurrency)}
+              </div>
+            </div>
+          </div>
         </div>
       )}
 
@@ -1501,20 +1977,33 @@ export const NonTickerAssetsPage: React.FC<NonTickerAssetsPageProps> = ({
             </p>
           </div>
 
-          {/* Timeframe Filter Buttons (Matching Dashboard standard: 1M, 3M, 6M, 1Y, 3Y, 5Y, YTD, ALL, CUSTOM) */}
+          {/* Timeframe Filter Buttons (Matching Dashboard standard with Mese corrente and Mese precedente) */}
           <div className="flex flex-wrap items-center gap-1 bg-slate-950/80 p-1 rounded-xl border border-slate-800 self-start sm:self-auto">
-            {(['1M', '3M', '6M', '1Y', '3Y', '5Y', 'YTD', 'ALL', 'CUSTOM'] as const).map(tf => (
+            {[
+              { id: 'CURRENT_MONTH' as NonTickerTimeframe, label: t.timeframeCurrentMonth || 'Mese corr.', title: 'Mese corrente (dal primo giorno ad oggi)' },
+              { id: 'PREVIOUS_MONTH' as NonTickerTimeframe, label: t.timeframePreviousMonth || 'Mese prec.', title: 'Mese precedente (dal primo all\'ultimo giorno)' },
+              { id: '1M' as NonTickerTimeframe, label: '1M', title: '1 Mese' },
+              { id: '3M' as NonTickerTimeframe, label: '3M', title: '3 Mesi' },
+              { id: '6M' as NonTickerTimeframe, label: '6M', title: '6 Mesi' },
+              { id: '1Y' as NonTickerTimeframe, label: '1Y', title: '1 Anno' },
+              { id: '3Y' as NonTickerTimeframe, label: '3Y', title: '3 Anni' },
+              { id: '5Y' as NonTickerTimeframe, label: '5Y', title: '5 Anni' },
+              { id: 'YTD' as NonTickerTimeframe, label: 'YTD', title: 'Da inizio anno' },
+              { id: 'ALL' as NonTickerTimeframe, label: 'ALL', title: 'Tutto lo storico' },
+              { id: 'CUSTOM' as NonTickerTimeframe, label: 'CUSTOM', title: 'Intervallo personalizzato' }
+            ].map(tf => (
               <button
-                key={tf}
+                key={tf.id}
                 type="button"
-                onClick={() => setTimeframe(tf)}
+                title={tf.title}
+                onClick={() => setTimeframe(tf.id)}
                 className={`px-2.5 py-1 text-[11px] font-bold rounded-lg transition cursor-pointer ${
-                  timeframe === tf
+                  timeframe === tf.id
                     ? 'bg-emerald-600 text-white shadow-sm'
                     : 'text-slate-400 hover:text-white'
                 }`}
               >
-                {tf}
+                {tf.label}
               </button>
             ))}
           </div>
@@ -1566,7 +2055,7 @@ export const NonTickerAssetsPage: React.FC<NonTickerAssetsPageProps> = ({
             </span>
             <div>
               <h4 className="font-extrabold text-xs sm:text-sm text-white uppercase font-mono tracking-wide">
-                {t.periodPerformanceTitle || 'Performance di Periodo'} ({timeframe})
+                {t.periodPerformanceTitle || 'Performance di Periodo'} ({getTimeframeDisplayLabel(timeframe)})
               </h4>
               <span className="text-[10px] text-slate-400 font-mono">
                 {formatDateString(periodPerformance.startDate, lang)} → {formatDateString(periodPerformance.endDate, lang)}
@@ -1694,7 +2183,7 @@ export const NonTickerAssetsPage: React.FC<NonTickerAssetsPageProps> = ({
                   {t.flowBreakdownTitle || 'Spaccato dei Flussi di Capitale'}
                 </h3>
                 <span className="text-[10px] text-slate-400 font-mono">
-                  {t.selectedPeriodLabel || 'Periodo selezionato'} ({timeframe})
+                  {t.selectedPeriodLabel || 'Periodo selezionato'} ({getTimeframeDisplayLabel(timeframe)})
                 </span>
               </div>
             </div>
@@ -1805,7 +2294,7 @@ export const NonTickerAssetsPage: React.FC<NonTickerAssetsPageProps> = ({
                   {t.summaryStatisticsTitle || 'Analisi Fiscale e Rendimenti'}
                 </h3>
                 <span className="text-[10px] text-slate-400 font-mono">
-                  {t.selectedPeriodLabel || 'Periodo selezionato'} ({timeframe})
+                  {t.selectedPeriodLabel || 'Periodo selezionato'} ({getTimeframeDisplayLabel(timeframe)})
                 </span>
               </div>
             </div>
@@ -1879,6 +2368,9 @@ export const NonTickerAssetsPage: React.FC<NonTickerAssetsPageProps> = ({
         movements={movements}
         entities={entities}
         movementTypeConfigs={movementTypeConfigs}
+        projects={projects}
+        selectedProjectFilter={selectedProjectIds}
+        onSelectProjectFilter={setSelectedProjectIds}
         selectedEntityId={selectedEntityId}
         onSelectEntityId={setSelectedEntityId}
         selectedCurrency={selectedCurrency}
@@ -2406,6 +2898,123 @@ export const NonTickerAssetsPage: React.FC<NonTickerAssetsPageProps> = ({
                   </div>
                 )}
 
+                {/* Transversal Project / Finalità Classifications */}
+                <div className="space-y-2 bg-slate-950/60 border border-slate-800/80 p-3.5 rounded-2xl">
+                  <div className="flex items-center justify-between">
+                    <label className="text-slate-300 font-semibold block flex items-center gap-1.5">
+                      <Tag className="w-3.5 h-3.5 text-emerald-400" />
+                      <span>{t.assignProjectsLabel || 'Progetti / Finalità (opzionale)'}</span>
+                    </label>
+                    <button
+                      type="button"
+                      onClick={() => setManageProjectsModalOpen(true)}
+                      className="text-[11px] text-emerald-400 hover:text-emerald-300 font-bold hover:underline cursor-pointer"
+                    >
+                      {t.manageProjectsBtn || 'Gestisci...'}
+                    </button>
+                  </div>
+
+                  {/* List of selectable projects */}
+                  <div className="flex flex-wrap items-center gap-1.5 pt-0.5">
+                    {projects
+                      .filter(p => !p.isArchived || movementForm.projectIds.includes(p.id))
+                      .map(p => {
+                        const isAssigned = movementForm.projectIds.includes(p.id);
+                        return (
+                          <button
+                            key={p.id}
+                            type="button"
+                            onClick={() => {
+                              if (isAssigned) {
+                                setMovementForm(prev => ({
+                                  ...prev,
+                                  projectIds: prev.projectIds.filter(id => id !== p.id)
+                                }));
+                              } else {
+                                setMovementForm(prev => ({
+                                  ...prev,
+                                  projectIds: [...prev.projectIds, p.id]
+                                }));
+                              }
+                            }}
+                            className={`px-2.5 py-1 rounded-xl text-xs font-bold transition cursor-pointer flex items-center gap-1.5 border ${
+                              isAssigned
+                                ? 'bg-slate-800 text-white shadow-sm ring-1 ring-emerald-500/50'
+                                : 'bg-slate-900 border-slate-800 text-slate-400 hover:text-slate-200'
+                            }`}
+                            style={
+                              isAssigned
+                                ? {
+                                    borderColor: p.color || '#10b981',
+                                    backgroundColor: p.color ? `${p.color}25` : '#10b98125'
+                                  }
+                                : {}
+                            }
+                          >
+                            <span
+                              className="w-2 h-2 rounded-full shrink-0"
+                              style={{ backgroundColor: p.color || '#10b981' }}
+                            />
+                            <span>{p.name}</span>
+                            {p.isArchived && (
+                              <span className="text-[9px] px-1 py-0.2 rounded bg-slate-900 border border-slate-700 text-slate-400">
+                                {t.archivedBadge || 'Archiv.'}
+                              </span>
+                            )}
+                            {isAssigned && <Check className="w-3 h-3 text-emerald-400" />}
+                          </button>
+                        );
+                      })}
+
+                    {projects.filter(p => !p.isArchived || movementForm.projectIds.includes(p.id)).length === 0 && (
+                      <span className="text-[11px] text-slate-500 italic">
+                        {t.noProjectsConfigured || 'Nessun progetto creato. Puoi crearne uno qui sotto:'}
+                      </span>
+                    )}
+                  </div>
+
+                  {/* Quick-add project inline */}
+                  <div className="flex items-center gap-2 pt-1 border-t border-slate-800/60">
+                    <input
+                      type="text"
+                      placeholder={t.projectNamePlaceholder || 'Crea rapidamente un nuovo progetto...'}
+                      value={quickProjectName}
+                      onChange={e => setQuickProjectName(e.target.value)}
+                      onKeyDown={async e => {
+                        if (e.key === 'Enter') {
+                          e.preventDefault();
+                          if (quickProjectName.trim()) {
+                            const newId = await handleQuickCreateProject(quickProjectName);
+                            setMovementForm(prev => ({
+                              ...prev,
+                              projectIds: [...prev.projectIds, newId]
+                            }));
+                            setQuickProjectName('');
+                          }
+                        }
+                      }}
+                      className="bg-slate-900 border border-slate-800 px-3 py-1.5 rounded-lg text-white text-xs placeholder-slate-500 focus:outline-none focus:border-emerald-500/60 flex-1"
+                    />
+                    <button
+                      type="button"
+                      disabled={!quickProjectName.trim()}
+                      onClick={async () => {
+                        if (quickProjectName.trim()) {
+                          const newId = await handleQuickCreateProject(quickProjectName);
+                          setMovementForm(prev => ({
+                            ...prev,
+                            projectIds: [...prev.projectIds, newId]
+                          }));
+                          setQuickProjectName('');
+                        }
+                      }}
+                      className="px-3 py-1.5 bg-emerald-600/30 hover:bg-emerald-600/50 text-emerald-300 border border-emerald-500/40 rounded-lg text-xs font-bold transition disabled:opacity-40 disabled:cursor-not-allowed cursor-pointer"
+                    >
+                      + {t.newProjectBtn || 'Aggiungi'}
+                    </button>
+                  </div>
+                </div>
+
                 {/* Notes */}
                 <div className="space-y-1.5">
                   <label className="text-slate-400 font-semibold block">{t.notesOrReferenceLabel || t.notes || 'Note o Riferimento'}</label>
@@ -2651,6 +3260,396 @@ export const NonTickerAssetsPage: React.FC<NonTickerAssetsPageProps> = ({
                   className="px-5 py-2 rounded-xl text-white bg-emerald-600 hover:bg-emerald-500 font-bold text-xs transition cursor-pointer shadow-sm"
                 >
                   {t.close || 'Chiudi'}
+                </button>
+              </div>
+            </div>
+          </div>
+        </ModalPortal>
+      )}
+
+      {/* ================= MODAL: MANAGE PROJECTS (via ModalPortal) ================= */}
+      {manageProjectsModalOpen && (
+        <ModalPortal isOpen={manageProjectsModalOpen}>
+          <div
+            className="fixed inset-0 z-50 flex items-center justify-center p-3 sm:p-4 bg-slate-950/80 backdrop-blur-sm overflow-hidden animate-fade-in"
+            dir={lang === 'ar' ? 'rtl' : 'ltr'}
+            onClick={e => {
+              if (e.target === e.currentTarget) {
+                setManageProjectsModalOpen(false);
+                setEditingProjectId(null);
+                setProjectInput({ name: '', description: '', color: '#10b981' });
+              }
+            }}
+          >
+            <div className="bg-slate-900 border border-slate-800 rounded-3xl p-5 sm:p-6 shadow-2xl max-w-xl w-full relative space-y-4 max-h-[calc(100vh-2rem)] sm:max-h-[calc(100vh-3rem)] flex flex-col overflow-y-auto custom-scrollbar my-auto">
+              {/* Header */}
+              <div className="flex items-center justify-between border-b border-slate-800/80 pb-3">
+                <div className="flex items-center gap-2.5">
+                  <span className="p-2 bg-emerald-500/10 rounded-xl text-emerald-400 border border-emerald-500/20">
+                    <FolderKanban className="w-4 h-4" />
+                  </span>
+                  <div>
+                    <h3 className="font-extrabold text-base text-white">
+                      {t.manageProjectsTitle || 'Gestione Progetti e Classificazioni'}
+                    </h3>
+                    <p className="text-[11px] text-slate-400 mt-0.5">
+                      {t.manageProjectsDesc || 'Crea, rinomina o archivia progetti per raggruppare i movimenti senza duplicare flussi contabili.'}
+                    </p>
+                  </div>
+                </div>
+                <button
+                  type="button"
+                  onClick={() => {
+                    setManageProjectsModalOpen(false);
+                    setEditingProjectId(null);
+                    setProjectInput({ name: '', description: '', color: '#10b981' });
+                  }}
+                  className="text-slate-400 hover:text-white p-1 rounded-lg hover:bg-slate-800 transition cursor-pointer"
+                >
+                  <X className="w-4 h-4" />
+                </button>
+              </div>
+
+              {/* Form: Add or Edit Project */}
+              <form onSubmit={handleSaveProject} className="p-4 bg-slate-950/70 border border-slate-800/80 rounded-2xl space-y-3">
+                <div className="flex items-center justify-between">
+                  <h4 className="text-xs font-bold text-slate-300 uppercase tracking-wider flex items-center gap-1.5">
+                    {editingProjectId ? (
+                      <>
+                        <Edit className="w-3.5 h-3.5 text-amber-400" />
+                        <span>{t.editProjectTitle || 'Modifica Progetto'}</span>
+                      </>
+                    ) : (
+                      <>
+                        <Plus className="w-3.5 h-3.5 text-emerald-400" />
+                        <span>{t.createNewProjectTitle || 'Crea Nuovo Progetto'}</span>
+                      </>
+                    )}
+                  </h4>
+                  {editingProjectId && (
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setEditingProjectId(null);
+                        setProjectInput({ name: '', description: '', color: '#10b981' });
+                      }}
+                      className="text-[11px] text-slate-400 hover:text-white underline cursor-pointer"
+                    >
+                      {t.cancelEdit || 'Annulla Modifica'}
+                    </button>
+                  )}
+                </div>
+
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                  <div className="space-y-1">
+                    <label className="text-[11px] text-slate-400 font-semibold block">
+                      {t.projectNameLabel || 'Nome Progetto *'}
+                    </label>
+                    <input
+                      type="text"
+                      required
+                      placeholder={t.projectNamePlaceholder || 'es. Cresima, Casa, Viaggi...'}
+                      value={projectInput.name}
+                      onChange={e => setProjectInput(prev => ({ ...prev, name: e.target.value }))}
+                      className="w-full bg-slate-900 border border-slate-800 px-3 py-1.5 rounded-xl text-white text-xs placeholder-slate-500 focus:outline-none focus:border-emerald-500/60"
+                    />
+                  </div>
+
+                  <div className="space-y-1">
+                    <label className="text-[11px] text-slate-400 font-semibold block">
+                      {t.projectDescLabel || 'Descrizione o Finalità (opzionale)'}
+                    </label>
+                    <input
+                      type="text"
+                      placeholder={t.projectDescPlaceholder || 'es. Obiettivo risparmio o evento'}
+                      value={projectInput.description}
+                      onChange={e => setProjectInput(prev => ({ ...prev, description: e.target.value }))}
+                      className="w-full bg-slate-900 border border-slate-800 px-3 py-1.5 rounded-xl text-white text-xs placeholder-slate-500 focus:outline-none focus:border-emerald-500/60"
+                    />
+                  </div>
+                </div>
+
+                {/* Color swatches */}
+                <div className="space-y-1.5 pt-1">
+                  <label className="text-[11px] text-slate-400 font-semibold block flex items-center gap-1.5">
+                    <Palette className="w-3.5 h-3.5 text-slate-400" />
+                    <span>{t.projectColorLabel || 'Colore Identificativo'}</span>
+                  </label>
+                  <div className="flex flex-wrap items-center gap-2">
+                    {PROJECT_PALETTE.map(c => {
+                      const isSelected = (projectInput.color || '#10b981').toLowerCase() === c.toLowerCase();
+                      return (
+                        <button
+                          key={c}
+                          type="button"
+                          onClick={() => setProjectInput(prev => ({ ...prev, color: c }))}
+                          className={`w-6 h-6 rounded-full border-2 transition-all flex items-center justify-center cursor-pointer ${
+                            isSelected ? 'border-white scale-110 shadow-md' : 'border-transparent hover:scale-105'
+                          }`}
+                          style={{ backgroundColor: c }}
+                          title={c}
+                        >
+                          {isSelected && <Check className="w-3.5 h-3.5 text-white stroke-[3]" />}
+                        </button>
+                      );
+                    })}
+                    <input
+                      type="color"
+                      value={projectInput.color || '#10b981'}
+                      onChange={e => setProjectInput(prev => ({ ...prev, color: e.target.value }))}
+                      className="w-6 h-6 rounded-full cursor-pointer bg-transparent border-0 p-0 overflow-hidden"
+                      title={t.customColor || 'Colore personalizzato'}
+                    />
+                  </div>
+                </div>
+
+                <div className="flex justify-end pt-1">
+                  <button
+                    type="submit"
+                    disabled={!projectInput.name.trim()}
+                    className="px-4 py-1.5 rounded-xl text-xs font-bold text-white bg-emerald-600 hover:bg-emerald-500 disabled:opacity-40 transition cursor-pointer shadow-md"
+                  >
+                    {editingProjectId ? (t.saveChanges || 'Salva Modifiche') : (t.createProjectBtn || 'Crea Progetto')}
+                  </button>
+                </div>
+              </form>
+
+              {/* Tabs: Active vs Archived */}
+              <div className="flex items-center gap-2 border-b border-slate-800">
+                <button
+                  type="button"
+                  onClick={() => setManageProjectsTab('ACTIVE')}
+                  className={`px-3 py-2 text-xs font-bold border-b-2 transition flex items-center gap-1.5 cursor-pointer ${
+                    manageProjectsTab === 'ACTIVE'
+                      ? 'border-emerald-500 text-emerald-400'
+                      : 'border-transparent text-slate-400 hover:text-slate-200'
+                  }`}
+                >
+                  <FolderKanban className="w-3.5 h-3.5" />
+                  <span>{t.activeProjectsTab || 'Progetti Attivi'} ({activeProjects.length})</span>
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setManageProjectsTab('ARCHIVED')}
+                  className={`px-3 py-2 text-xs font-bold border-b-2 transition flex items-center gap-1.5 cursor-pointer ${
+                    manageProjectsTab === 'ARCHIVED'
+                      ? 'border-emerald-500 text-emerald-400'
+                      : 'border-transparent text-slate-400 hover:text-slate-200'
+                  }`}
+                >
+                  <Archive className="w-3.5 h-3.5" />
+                  <span>{t.archivedProjectsTab || 'Archiviati'} ({archivedProjects.length})</span>
+                </button>
+              </div>
+
+              {/* Projects List */}
+              <div className="space-y-2 max-h-64 overflow-y-auto custom-scrollbar pr-1">
+                {manageProjectsTab === 'ACTIVE' && (
+                  <>
+                    {activeProjects.length === 0 ? (
+                      <div className="text-center py-6 text-slate-500 text-xs italic">
+                        {t.noActiveProjectsMsg || 'Nessun progetto attivo. Usa il modulo sopra per crearne uno.'}
+                      </div>
+                    ) : (
+                      activeProjects.map(proj => {
+                        const mCount = movements.filter(m => m.projectIds?.includes(proj.id)).length;
+                        return (
+                          <div
+                            key={proj.id}
+                            className="flex items-center justify-between p-2.5 bg-slate-950/60 border border-slate-800/80 rounded-xl hover:border-slate-700 transition"
+                          >
+                            <div className="flex items-center gap-2.5 min-w-0">
+                              <span
+                                className="w-3.5 h-3.5 rounded-full shrink-0 shadow-sm"
+                                style={{ backgroundColor: proj.color || '#10b981' }}
+                              />
+                              <div className="min-w-0">
+                                <div className="flex items-center gap-2">
+                                  <span className="text-xs font-bold text-white truncate">{proj.name}</span>
+                                  <span className="px-1.5 py-0.5 rounded text-[10px] bg-slate-800 text-slate-300 font-mono">
+                                    {mCount} {mCount === 1 ? (t.movementSingular || 'movimento') : (t.movementsPlural || 'movimenti')}
+                                  </span>
+                                </div>
+                                {proj.description && (
+                                  <p className="text-[11px] text-slate-400 truncate mt-0.5">{proj.description}</p>
+                                )}
+                              </div>
+                            </div>
+
+                            <div className="flex items-center gap-1 shrink-0 ml-2">
+                              <button
+                                type="button"
+                                onClick={() => {
+                                  setEditingProjectId(proj.id);
+                                  setProjectInput({
+                                    name: proj.name,
+                                    description: proj.description || '',
+                                    color: proj.color || '#10b981'
+                                  });
+                                }}
+                                className="p-1 text-slate-400 hover:text-white rounded hover:bg-slate-800 transition cursor-pointer"
+                                title={t.edit || 'Modifica'}
+                              >
+                                <Edit className="w-3.5 h-3.5" />
+                              </button>
+                              <button
+                                type="button"
+                                onClick={() => handleArchiveProject(proj.id, true)}
+                                className="p-1 text-slate-400 hover:text-amber-400 rounded hover:bg-amber-950/20 transition cursor-pointer"
+                                title={t.archiveProject || 'Archivia'}
+                              >
+                                <Archive className="w-3.5 h-3.5" />
+                              </button>
+                              <button
+                                type="button"
+                                onClick={() => handleDeleteProject(proj.id)}
+                                className="p-1 text-slate-400 hover:text-rose-400 rounded hover:bg-rose-950/20 transition cursor-pointer"
+                                title={t.delete || 'Elimina'}
+                              >
+                                <Trash2 className="w-3.5 h-3.5" />
+                              </button>
+                            </div>
+                          </div>
+                        );
+                      })
+                    )}
+                  </>
+                )}
+
+                {manageProjectsTab === 'ARCHIVED' && (
+                  <>
+                    {archivedProjects.length === 0 ? (
+                      <div className="text-center py-6 text-slate-500 text-xs italic">
+                        {t.noArchivedProjectsMsg || 'Nessun progetto archiviato.'}
+                      </div>
+                    ) : (
+                      archivedProjects.map(proj => {
+                        const mCount = movements.filter(m => m.projectIds?.includes(proj.id)).length;
+                        return (
+                          <div
+                            key={proj.id}
+                            className="flex items-center justify-between p-2.5 bg-slate-950/40 border border-slate-800/60 rounded-xl opacity-80 hover:opacity-100 transition"
+                          >
+                            <div className="flex items-center gap-2.5 min-w-0">
+                              <span
+                                className="w-3.5 h-3.5 rounded-full shrink-0 opacity-60"
+                                style={{ backgroundColor: proj.color || '#64748b' }}
+                              />
+                              <div className="min-w-0">
+                                <div className="flex items-center gap-2">
+                                  <span className="text-xs font-medium text-slate-300 line-through truncate">{proj.name}</span>
+                                  <span className="px-1.5 py-0.5 rounded text-[10px] bg-slate-800/60 text-slate-400 font-mono">
+                                    {mCount} {mCount === 1 ? (t.movementSingular || 'movimento') : (t.movementsPlural || 'movimenti')}
+                                  </span>
+                                </div>
+                                {proj.description && (
+                                  <p className="text-[11px] text-slate-500 truncate mt-0.5">{proj.description}</p>
+                                )}
+                              </div>
+                            </div>
+
+                            <div className="flex items-center gap-1 shrink-0 ml-2">
+                              <button
+                                type="button"
+                                onClick={() => handleArchiveProject(proj.id, false)}
+                                className="p-1 text-emerald-400 hover:text-emerald-300 rounded hover:bg-emerald-950/20 transition cursor-pointer flex items-center gap-1 text-[11px] font-semibold px-2"
+                                title={t.restoreProject || 'Riattiva'}
+                              >
+                                <ArchiveRestore className="w-3.5 h-3.5" />
+                                <span>{t.restoreBtn || 'Riattiva'}</span>
+                              </button>
+                              <button
+                                type="button"
+                                onClick={() => handleDeleteProject(proj.id)}
+                                className="p-1 text-slate-400 hover:text-rose-400 rounded hover:bg-rose-950/20 transition cursor-pointer"
+                                title={t.delete || 'Elimina'}
+                              >
+                                <Trash2 className="w-3.5 h-3.5" />
+                              </button>
+                            </div>
+                          </div>
+                        );
+                      })
+                    )}
+                  </>
+                )}
+              </div>
+
+              {/* Footer */}
+              <div className="flex items-center justify-end pt-3 border-t border-slate-800/80">
+                <button
+                  type="button"
+                  onClick={() => {
+                    setManageProjectsModalOpen(false);
+                    setEditingProjectId(null);
+                    setProjectInput({ name: '', description: '', color: '#10b981' });
+                  }}
+                  className="px-5 py-2 rounded-xl text-white bg-emerald-600 hover:bg-emerald-500 font-bold text-xs transition cursor-pointer shadow-sm"
+                >
+                  {t.close || 'Chiudi'}
+                </button>
+              </div>
+            </div>
+          </div>
+        </ModalPortal>
+      )}
+
+      {/* ================= MODAL: CONFIRM DELETE PROJECT (via ModalPortal) ================= */}
+      {projectToDeleteConfirm && (
+        <ModalPortal isOpen={!!projectToDeleteConfirm}>
+          <div
+            className="fixed inset-0 z-[60] flex items-center justify-center p-3 sm:p-4 bg-slate-950/85 backdrop-blur-sm overflow-hidden animate-fade-in"
+            dir={lang === 'ar' ? 'rtl' : 'ltr'}
+            onClick={e => {
+              if (e.target === e.currentTarget) {
+                setProjectToDeleteConfirm(null);
+              }
+            }}
+          >
+            <div className="bg-slate-900 border border-rose-500/30 rounded-3xl p-5 sm:p-6 shadow-2xl max-w-md w-full relative space-y-4 my-auto">
+              <div className="flex items-center gap-3">
+                <span className="p-2.5 bg-rose-500/10 rounded-xl text-rose-400 border border-rose-500/20 shrink-0">
+                  <Trash2 className="w-5 h-5 animate-pulse" />
+                </span>
+                <div>
+                  <h3 className="font-extrabold text-base text-white">
+                    {t.deleteProjectTitle || 'Elimina Progetto'}
+                  </h3>
+                  <p className="text-xs text-slate-400 mt-0.5">
+                    {t.deleteProjectPrompt || "I movimenti associati rimarranno intatti nei perimetri e nei calcoli finanziari, ma l'etichetta del progetto verrà rimossa."}
+                  </p>
+                </div>
+              </div>
+
+              <div className="p-3 bg-slate-950/80 rounded-xl border border-slate-800 text-xs font-mono text-slate-200 flex items-center gap-2.5">
+                <span
+                  className="w-3.5 h-3.5 rounded-full shrink-0 shadow-sm"
+                  style={{
+                    backgroundColor:
+                      projects.find(p => p.id === projectToDeleteConfirm.id)?.color || '#10b981'
+                  }}
+                />
+                <span className="font-bold truncate text-white">{projectToDeleteConfirm.name}</span>
+              </div>
+
+              <div className="flex items-center justify-end gap-2.5 pt-2">
+                <button
+                  type="button"
+                  onClick={() => setProjectToDeleteConfirm(null)}
+                  className="px-4 py-2 rounded-xl text-slate-400 hover:text-white bg-slate-800 hover:bg-slate-700 font-bold text-xs transition cursor-pointer"
+                >
+                  {t.cancel || 'Annulla'}
+                </button>
+                <button
+                  type="button"
+                  onClick={async () => {
+                    const id = projectToDeleteConfirm.id;
+                    setProjectToDeleteConfirm(null);
+                    await executeDeleteProject(id);
+                  }}
+                  className="px-5 py-2 rounded-xl text-white bg-rose-600 hover:bg-rose-500 font-bold text-xs transition shadow-lg shadow-rose-950/30 cursor-pointer"
+                >
+                  {t.confirmPermanentDeleteBtn || t.confirmBtn || 'Elimina definitivamente'}
                 </button>
               </div>
             </div>
