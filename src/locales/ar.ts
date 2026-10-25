@@ -767,5 +767,24 @@ export const arLocale: LanguagePhrases = {
   noChartDataWarning: 'لا توجد بيانات زمنية كافية لرسم المخطط البياني.',
   statementValuationShort: 'كشف الحساب',
   capitalFlowShort: 'تدفق رأس المال',
-  investedShort: 'المستثمر'
+  investedShort: 'المستثمر',
+
+  // Instruments & ISIN
+  instrumentManagementTitle: 'إدارة الأدوات المالية ومصادر الأسعار',
+  instrumentManagementDesc: 'قم بتهيئة رمز ISIN ومصدر الأسعار (Yahoo Finance أو Lang & Schwarz) لكل رمز.',
+  tabTickerConfig: 'تهيئة الرموز (ISIN والمصادر)',
+  tabGroups: 'مجموعات البورصات المتعددة',
+  isinLabel: 'رمز ISIN (رقم التعريف الدولي للأوراق المالية)',
+  isinPlaceholder: 'مثال: IE00BK5BQT80',
+  quoteSourceLabel: 'مصدر الأسعار',
+  sourceYahoo: 'Yahoo Finance (افتراضي)',
+  sourceLS: 'Lang & Schwarz',
+  testAndFetchQuotes: 'تحقق وتحديث',
+  saveTickerConfig: 'حفظ التهيئة',
+  isinRequiredForLS: 'رمز ISIN مطلوب بشكل إلزامي لاستخدام Lang & Schwarz.',
+  instrumentNotFoundLS: 'لم يتم العثور على أداة مطابقة لرمز ISIN هذا في Lang & Schwarz.',
+  quotesFetchedSuccessLS: 'تم جلب الأسعار بنجاح من Lang & Schwarz!',
+  addTickerManualBtn: 'رمز جديد',
+  allConfiguredTickers: 'جميع الرموز',
+  defaultSourceNotice: 'تستخدم جميع الأدوات Yahoo Finance بشكل افتراضي ما لم يتم اختيار Lang & Schwarz صراحةً.'
 };

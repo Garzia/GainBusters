@@ -240,6 +240,189 @@ function parseBinanceData(data: any[], multiplier: number = 1.0): { [date: strin
   return priceMap;
 }
 
+async function fetchWithFallback(proxyPath: string, directUrl: string): Promise<Response> {
+  if (typeof window !== 'undefined') {
+    try {
+      const res = await fetch(proxyPath, { headers: { 'Accept': 'application/json' } });
+      if (res.ok) return res;
+    } catch (_) {}
+  }
+  return await fetch(directUrl, {
+    headers: {
+      'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+      'Accept': 'application/json'
+    }
+  });
+}
+
+export interface LangSchwarzSearchResult {
+  instrumentId: number;
+  isin: string;
+  displayname?: string;
+  wkn?: string;
+  categoryName?: string;
+}
+
+export async function searchLangSchwarzInstrument(isin: string): Promise<LangSchwarzSearchResult> {
+  const cleanIsin = (isin || '').trim().toUpperCase();
+  if (!cleanIsin) {
+    throw new Error('ISIN non specificato.');
+  }
+
+  // Format validation for 12 alphanumeric characters
+  if (!/^[A-Z]{2}[A-Z0-9]{9}[0-9]$/.test(cleanIsin)) {
+    throw new Error(`Formato ISIN non valido: "${cleanIsin}". Deve essere composto da 12 caratteri (es. IE00BK5BQT80).`);
+  }
+
+  const proxyUrl = `/api/ls/search?q=${encodeURIComponent(cleanIsin)}&localeId=1`;
+  const directUrl = `https://www.ls-tc.de/_rpc/json/.lstc/instrument/search/main?q=${encodeURIComponent(cleanIsin)}&localeId=1`;
+
+  let res: Response;
+  try {
+    res = await fetchWithFallback(proxyUrl, directUrl);
+  } catch (err: any) {
+    throw new Error(`Errore di rete durante la ricerca ISIN su Lang & Schwarz: ${err.message}`);
+  }
+
+  if (!res.ok) {
+    throw new Error(`Lang & Schwarz ha risposto con codice HTTP ${res.status}`);
+  }
+
+  let data: any;
+  try {
+    data = await res.json();
+  } catch (err: any) {
+    throw new Error('Risposta JSON non valida ricevuta da Lang & Schwarz.');
+  }
+
+  if (!Array.isArray(data) || data.length === 0) {
+    throw new Error(`Nessuno strumento trovato su Lang & Schwarz per l'ISIN ${cleanIsin}.`);
+  }
+
+  // Filter items matching the exact ISIN
+  const exactMatches = data.filter((item: any) => (item.isin || '').trim().toUpperCase() === cleanIsin);
+
+  if (exactMatches.length === 0) {
+    throw new Error(`Nessun risultato corrisponde esattamente all'ISIN ${cleanIsin} tra gli strumenti restituiti da Lang & Schwarz.`);
+  }
+
+  // If there are multiple matches, prefer the one with a defined instrumentId or id
+  let target = exactMatches[0];
+  if (exactMatches.length > 1) {
+    const withInstrumentId = exactMatches.filter((item: any) => (item.instrumentId || item.id));
+    if (withInstrumentId.length > 0) {
+      target = withInstrumentId[0];
+    }
+  }
+
+  const rawInstrumentId = target.instrumentId || target.id;
+  const instrumentId = Number(rawInstrumentId);
+  if (!instrumentId || isNaN(instrumentId)) {
+    throw new Error(`Impossibile estrarre un instrumentId valido per l'ISIN ${cleanIsin}.`);
+  }
+
+  return {
+    instrumentId,
+    isin: cleanIsin,
+    displayname: target.displayname || target.name || target.title,
+    wkn: target.wkn,
+    categoryName: target.categoryName || target.categorySymbol
+  };
+}
+
+export async function fetchLangSchwarzPrices(
+  symbol: string,
+  isin: string,
+  instrumentId?: number,
+  startDateStr?: string,
+  endDateStr?: string
+): Promise<{ prices: { [date: string]: number }; instrumentInfo: { instrumentId: number; isin: string; displayname?: string; wkn?: string; categoryName?: string } }> {
+  const cleanIsin = (isin || '').trim().toUpperCase();
+  let resolvedInstrumentId = instrumentId && !isNaN(Number(instrumentId)) && Number(instrumentId) > 0 ? Number(instrumentId) : undefined;
+  let info: any = { instrumentId: resolvedInstrumentId, isin: cleanIsin };
+
+  // Only perform search call if instrumentId is not yet known
+  if (!resolvedInstrumentId) {
+    const searchResult = await searchLangSchwarzInstrument(cleanIsin);
+    resolvedInstrumentId = searchResult.instrumentId;
+    info = searchResult;
+  }
+
+  // 2. Fetch chart data via single call to instrumentId
+  const proxyUrl = `/api/ls/chart?instrumentId=${encodeURIComponent(resolvedInstrumentId)}&container=chart1&marketId=1&quotetype=bid&series=intraday%2Chistory%2Cflags&type=&localeId=1`;
+  const directUrl = `https://www.ls-tc.de/_rpc/json/instrument/chart/dataForInstrument?container=chart1&instrumentId=${encodeURIComponent(resolvedInstrumentId)}&marketId=1&quotetype=bid&series=intraday%2Chistory%2Cflags&type=&localeId=1`;
+
+  let res: Response;
+  try {
+    res = await fetchWithFallback(proxyUrl, directUrl);
+  } catch (err: any) {
+    throw new Error(`Errore di connessione a Lang & Schwarz per le quotazioni di ${symbol}: ${err.message}`);
+  }
+
+  if (!res.ok) {
+    throw new Error(`Errore HTTP ${res.status} nel recupero quotazioni Lang & Schwarz per ${symbol}`);
+  }
+
+  let json: any;
+  try {
+    json = await res.json();
+  } catch (err: any) {
+    throw new Error(`Formato dati non valido ricevuto da Lang & Schwarz per ${symbol}`);
+  }
+
+  const series = json.series || {};
+  const historyData = series.history?.data;
+  const intradayData = series.intraday?.data;
+
+  const priceMap: { [date: string]: number } = {};
+
+  // Process historical series (daily quotes)
+  // Strictly filter by startDateStr and endDateStr to avoid bloating the DB with irrelevant past years
+  if (Array.isArray(historyData)) {
+    for (const point of historyData) {
+      if (Array.isArray(point) && point.length >= 2) {
+        const ts = point[0];
+        const val = point[1];
+        if (typeof val === 'number' && !isNaN(val) && val > 0 && typeof ts === 'number') {
+          const ptDate = new Date(ts);
+          const dateStr = `${ptDate.getFullYear()}-${String(ptDate.getMonth() + 1).padStart(2, '0')}-${String(ptDate.getDate()).padStart(2, '0')}`;
+          if (startDateStr && dateStr < startDateStr) continue;
+          if (endDateStr && dateStr > endDateStr) continue;
+          priceMap[dateStr] = Number(val.toFixed(val < 1 ? 8 : 4));
+        }
+      }
+    }
+  }
+
+  // Process intraday series: ONLY for the current day (todayStr), and ONLY if available
+  const targetTodayStr = endDateStr || new Date().toISOString().split('T')[0];
+  if (Array.isArray(intradayData) && intradayData.length > 0) {
+    for (let i = intradayData.length - 1; i >= 0; i--) {
+      const point = intradayData[i];
+      if (Array.isArray(point) && point.length >= 2) {
+        const ts = point[0];
+        const val = point[1];
+        if (typeof val === 'number' && !isNaN(val) && val > 0 && typeof ts === 'number') {
+          const ptDate = new Date(ts);
+          const intraDateStr = `${ptDate.getFullYear()}-${String(ptDate.getMonth() + 1).padStart(2, '0')}-${String(ptDate.getDate()).padStart(2, '0')}`;
+          
+          // Only attach to today's date if the intraday sample actually belongs to today
+          if (intraDateStr === targetTodayStr) {
+            priceMap[targetTodayStr] = Number(val.toFixed(val < 1 ? 8 : 4));
+            break;
+          }
+        }
+      }
+    }
+  }
+
+  if (Object.keys(priceMap).length === 0) {
+    throw new Error(`Nessuna quotazione valida disponibile per ${symbol} (ISIN: ${cleanIsin}) da Lang & Schwarz.`);
+  }
+
+  return { prices: priceMap, instrumentInfo: { ...info, instrumentId: resolvedInstrumentId } };
+}
+
 export async function syncPricesLocally(
   symbols: string[],
   force: boolean,
@@ -249,8 +432,10 @@ export async function syncPricesLocally(
     return db;
   }
 
-  // Deep copy price cache
+  // Deep copy price cache and ticker configs
   const newPriceCache = JSON.parse(JSON.stringify(db.priceCache || {}));
+  let newTickerConfigs: { [sym: string]: any } | null = null;
+  let updatedTickerConfigs = false;
   let updatedAnyCache = false;
   let hasAnySuccess = false;
   const todayStr = new Date().toISOString().split('T')[0];
@@ -316,6 +501,13 @@ export async function syncPricesLocally(
       newPriceCache[symbolUpper] = {};
     }
 
+    // Clean up extraneous dates older than oldestDateStr or in future to prevent DB bloat
+    Object.keys(newPriceCache[symbolUpper]).forEach(d => {
+      if (d < oldestDateStr || d > todayStr) {
+        delete newPriceCache[symbolUpper][d];
+      }
+    });
+
     if (force) {
       const oneMonthAgo = new Date();
       oneMonthAgo.setMonth(oneMonthAgo.getMonth() - 1);
@@ -345,20 +537,65 @@ export async function syncPricesLocally(
       let fetchedPrices: { [date: string]: number } = {};
       let fetchSuccessful = false;
 
-      // 1. Try Yahoo Finance
-      try {
-        fetchedPrices = await fetchYahooFinancePrices(symbolUpper, finalFetchStartStr, todayStr);
-        fetchSuccessful = Object.keys(fetchedPrices).length > 0;
-      } catch (yahooErr) {
-        console.warn(`Yahoo Finance fetch failed for ${symbolUpper}. Trying fallback...`, yahooErr);
-        // 2. If crypto, try Binance fallback
-        if (isCrypto || isCryptoTicker(symbolUpper)) {
+      const tickerConfig = (db.tickerConfigs && db.tickerConfigs[symbolUpper]) || {};
+      const quoteSource = tickerConfig.source || 'yahoo';
+      const tickerIsin = (tickerConfig.isin || '').trim().toUpperCase();
+      const savedInstrumentId = tickerConfig.instrumentId ? Number(tickerConfig.instrumentId) : undefined;
+
+      if (quoteSource === 'ls') {
+        if (!tickerIsin) {
+          console.warn(`[Lang & Schwarz] Ticker ${symbolUpper} impostato su Lang & Schwarz ma senza ISIN configurato. Quotazioni non recuperate.`);
+        } else {
           try {
-            fetchedPrices = await fetchBinanceCryptoPrices(symbolUpper, finalFetchStartStr, todayStr);
+            console.log(`[Lang & Schwarz Request] Recupero quotazioni per ${symbolUpper} (ISIN: ${tickerIsin}, InstrumentID: ${savedInstrumentId || 'non salvato'})`);
+            // Start date is strictly bounded by oldestDateStr so historical data before portfolio inception is never saved
+            const lsStart = finalFetchStartStr > oldestDateStr ? finalFetchStartStr : oldestDateStr;
+            const lsResult = await fetchLangSchwarzPrices(
+              symbolUpper,
+              tickerIsin,
+              savedInstrumentId,
+              lsStart,
+              todayStr
+            );
+            fetchedPrices = lsResult.prices;
             fetchSuccessful = Object.keys(fetchedPrices).length > 0;
-            console.log(`Binance fallback succeeded for ${symbolUpper} (${Object.keys(fetchedPrices).length} points)`);
-          } catch (binanceErr) {
-            console.warn(`Binance fallback also failed for ${symbolUpper}`, binanceErr);
+            if (fetchSuccessful) {
+              console.log(`[Lang & Schwarz] Recuperate con successo ${Object.keys(fetchedPrices).length} quotazioni per ${symbolUpper}`);
+            }
+
+            // If instrumentId was not previously stored in DB config, persist it
+            if (!savedInstrumentId && lsResult.instrumentInfo.instrumentId) {
+              if (!newTickerConfigs) {
+                newTickerConfigs = JSON.parse(JSON.stringify(db.tickerConfigs || {}));
+              }
+              newTickerConfigs[symbolUpper] = {
+                ...(newTickerConfigs[symbolUpper] || tickerConfig),
+                isin: tickerIsin,
+                source: 'ls',
+                instrumentId: lsResult.instrumentInfo.instrumentId
+              };
+              updatedTickerConfigs = true;
+            }
+          } catch (lsErr: any) {
+            console.warn(`[Lang & Schwarz] Recupero fallito per ${symbolUpper} (ISIN: ${tickerIsin}):`, lsErr.message || lsErr);
+          }
+        }
+      } else {
+        // 1. Default: Try Yahoo Finance
+        try {
+          fetchedPrices = await fetchYahooFinancePrices(symbolUpper, finalFetchStartStr, todayStr);
+          fetchSuccessful = Object.keys(fetchedPrices).length > 0;
+        } catch (yahooErr) {
+          console.warn(`Yahoo Finance fetch failed for ${symbolUpper}. Trying fallback...`, yahooErr);
+          // 2. If crypto, try Binance fallback
+          if (isCrypto || isCryptoTicker(symbolUpper)) {
+            try {
+              fetchedPrices = await fetchBinanceCryptoPrices(symbolUpper, finalFetchStartStr, todayStr);
+              fetchSuccessful = Object.keys(fetchedPrices).length > 0;
+              console.log(`Binance fallback succeeded for ${symbolUpper} (${Object.keys(fetchedPrices).length} points)`);
+            } catch (binanceErr) {
+              console.warn(`Binance fallback also failed for ${symbolUpper}`, binanceErr);
+            }
           }
         }
       }
@@ -367,9 +604,9 @@ export async function syncPricesLocally(
         hasAnySuccess = true;
         updatedAnyCache = true;
 
-        // Store authentic market closing prices from API
+        // Store authentic market closing prices from API strictly within portfolio validity range
         Object.keys(fetchedPrices).forEach(date => {
-          if (fetchedPrices[date] > 0) {
+          if (fetchedPrices[date] > 0 && date >= oldestDateStr && date <= todayStr) {
             newPriceCache[symbolUpper][date] = fetchedPrices[date];
           }
         });
@@ -452,10 +689,11 @@ export async function syncPricesLocally(
     console.info("Price sync finished with cached entries intact.");
   }
 
-  if (updatedAnyCache) {
+  if (updatedAnyCache || updatedTickerConfigs) {
     return {
       ...db,
-      priceCache: newPriceCache
+      priceCache: newPriceCache,
+      ...(updatedTickerConfigs && newTickerConfigs ? { tickerConfigs: newTickerConfigs } : {})
     };
   }
 

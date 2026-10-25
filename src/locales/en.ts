@@ -137,9 +137,9 @@ GainBusters is crafted as a **100% self-hosted, offline-first application** buil
   enterPasswordToLoad: 'Enter the password defined during creation to unlock and load your file.',
   back: 'Back',
   decryptAndEnter: 'Decrypt & Enter',
-  connectionToYahoo: 'Connecting to Yahoo Finance, retrieving quotes...',
-  quotesUpdatedSuccess: 'Quotes retrieved successfully from Yahoo Finance!',
-  quotesSyncError: 'Error occurred while syncing with Yahoo Finance.',
+  connectionToYahoo: 'Syncing market quotes from configured sources...',
+  quotesUpdatedSuccess: 'Market quotes updated successfully!',
+  quotesSyncError: 'Error occurred while syncing market quotes.',
   quotesSyncConnectionFailed: 'Connection failed while updating quotes.',
   activeLanguageLabel: 'Active Language:',
   createYourFirstAccount: 'Create your First Account now &rarr;',
@@ -432,7 +432,7 @@ GainBusters is crafted as a **100% self-hosted, offline-first application** buil
   safeWithdrawalRateLabel: 'Safe Withdrawal Rate (SWR)',
   readOnLabel: 'Read',
   validationErrorAllFieldsRequired: 'Please fill in all required fields correctly.',
-  refreshPricesTooltip: 'Sync & Force historical stock quotes update from Yahoo Finance',
+  refreshPricesTooltip: 'Sync and update historical quotes from configured sources (Yahoo Finance & Lang & Schwarz)',
   analysisPerimeterLabel: 'Analysis Perimeter',
   benchmarkLabel: 'Benchmark',
   brokerLabel: 'Broker',
@@ -572,6 +572,25 @@ GainBusters is crafted as a **100% self-hosted, offline-first application** buil
   confirmDeleteGroup: 'Are you sure you want to delete this group? All transactions and individual tickers will remain untouched.',
   groupDetailsLabel: 'Group Details',
   weightInGroupLabel: 'Weight in Group',
+
+  // Instrument Management, ISIN & Quote Sources (Yahoo Finance & Lang & Schwarz)
+  instrumentManagementTitle: 'Instrument & Quote Source Manager',
+  instrumentManagementDesc: 'Configure ISIN and quote source (Yahoo Finance or Lang & Schwarz) for each ticker, and organize multi-exchange groupings.',
+  tabTickerConfig: 'Ticker Config (ISIN & Sources)',
+  tabGroups: 'Multi-Exchange Groups',
+  isinLabel: 'ISIN Code (International Securities Identification Number)',
+  isinPlaceholder: 'e.g. IE00BK5BQT80',
+  quoteSourceLabel: 'Quote Source',
+  sourceYahoo: 'Yahoo Finance (Default)',
+  sourceLS: 'Lang & Schwarz',
+  testAndFetchQuotes: 'Verify & Sync',
+  saveTickerConfig: 'Save Configuration',
+  isinRequiredForLS: 'ISIN is strictly required when using Lang & Schwarz as quote source.',
+  instrumentNotFoundLS: 'No matching instrument found for this ISIN on Lang & Schwarz.',
+  quotesFetchedSuccessLS: 'Lang & Schwarz quotes fetched successfully!',
+  addTickerManualBtn: 'New Ticker',
+  allConfiguredTickers: 'All Tickers',
+  defaultSourceNotice: 'All instruments use Yahoo Finance by default unless Lang & Schwarz is explicitly selected.',
 
   // Non-Ticker Assets & Investments (Pension Funds, High-Yield Savings, Corporate Severance, etc.)
   nonTickerTab: 'Non-Ticker Assets',
@@ -908,5 +927,15 @@ GainBusters is crafted as a **100% self-hosted, offline-first application** buil
   selectProjectsPlaceholder: 'Select or create projects...',
   timeframeCurrentMonth: 'Current Mo.',
   timeframePreviousMonth: 'Prev. Mo.',
-  projectsColumn: 'Projects'
+  projectsColumn: 'Projects',
+
+  // Quotes History & Verification
+  tabQuotesHistory: 'Quotes & Price History',
+  quotesHistoryTitle: 'Historical Quotes Inspector & Editor',
+  quotesHistoryDesc: 'Inspect every recorded quote point and manually add, edit, or override quotes.',
+  verifyQuotesBtn: 'Verify Quotes',
+  manualQuoteTitle: 'Manual Quote Entry / Override',
+  quoteDateLabel: 'Quote Date',
+  quotePriceLabel: 'Price / Quote',
+  saveQuoteBtn: 'Save Quote'
 };

@@ -137,9 +137,9 @@ GainBusters nasce come un software **100% autogestito (Self-Hosted)**, pensato p
   enterPasswordToLoad: 'Inserisci la password definita durante la creazione del file per caricarlo.',
   back: 'Indietro',
   decryptAndEnter: 'Decifra ed Entra',
-  connectionToYahoo: 'Connessione con Yahoo Finance, recupero quotazioni...',
-  quotesUpdatedSuccess: 'Quotazioni aggiornate con successo da Yahoo Finance!',
-  quotesSyncError: 'Errore durante la sincronizzazione con Yahoo Finance.',
+  connectionToYahoo: 'Recupero e sincronizzazione quotazioni di mercato in corso...',
+  quotesUpdatedSuccess: 'Quotazioni di mercato aggiornate con successo!',
+  quotesSyncError: 'Errore durante la sincronizzazione delle quotazioni.',
   quotesSyncConnectionFailed: 'Connessione fallita nell\'aggiornare le quotazioni.',
   activeLanguageLabel: 'Lingua attiva (Language):',
   createYourFirstAccount: 'Crea il tuo Primo Conto ora &rarr;',
@@ -432,7 +432,7 @@ GainBusters nasce come un software **100% autogestito (Self-Hosted)**, pensato p
   safeWithdrawalRateLabel: 'Safe Withdrawal Rate (SWR)',
   readOnLabel: 'Letto',
   validationErrorAllFieldsRequired: 'Inserisci tutti i campi obbligatori correttamente.',
-  refreshPricesTooltip: 'Sincronizza e Forza aggiornamento storico di tutte le quotazioni da Yahoo Finance',
+  refreshPricesTooltip: 'Sincronizza e aggiorna lo storico delle quotazioni dalle fonti configurate (Yahoo Finance & Lang & Schwarz)',
   analysisPerimeterLabel: 'Perimetro d\'Analisi',
   benchmarkLabel: 'Benchmark',
   brokerLabel: 'Broker',
@@ -572,6 +572,25 @@ GainBusters nasce come un software **100% autogestito (Self-Hosted)**, pensato p
   confirmDeleteGroup: 'Sei sicuro di voler rimuovere questo raggruppamento? Le transazioni e i singoli ticker rimarranno intatti.',
   groupDetailsLabel: 'Dettagli Gruppo',
   weightInGroupLabel: 'Peso nel Gruppo',
+
+  // Gestione Strumenti, ISIN e Fonti Quotazioni (Yahoo Finance & Lang & Schwarz)
+  instrumentManagementTitle: 'Gestione Strumenti & Quotazioni',
+  instrumentManagementDesc: 'Configura ISIN e fonte quotazioni (Yahoo Finance o Lang & Schwarz) per ciascun ticker, e organizza i raggruppamenti multi-borsa.',
+  tabTickerConfig: 'Configurazione Ticker (ISIN & Fonti)',
+  tabGroups: 'Raggruppamenti Multi-Borsa',
+  isinLabel: 'Codice ISIN (International Securities Identification Number)',
+  isinPlaceholder: 'es. IE00BK5BQT80',
+  quoteSourceLabel: 'Fonte delle Quotazioni',
+  sourceYahoo: 'Yahoo Finance (Predefinita)',
+  sourceLS: 'Lang & Schwarz',
+  testAndFetchQuotes: 'Verifica e Aggiorna',
+  saveTickerConfig: 'Salva Configurazione',
+  isinRequiredForLS: 'L\'ISIN è obbligatorio per utilizzare Lang & Schwarz come fonte di quotazione.',
+  instrumentNotFoundLS: 'Nessuno strumento trovato per questo ISIN su Lang & Schwarz.',
+  quotesFetchedSuccessLS: 'Quotazioni Lang & Schwarz recuperate con successo!',
+  addTickerManualBtn: 'Nuovo Ticker',
+  allConfiguredTickers: 'Elenco Ticker',
+  defaultSourceNotice: 'Tutti gli strumenti utilizzano Yahoo Finance come fonte predefinita, a meno che non sia esplicitamente selezionato Lang & Schwarz.',
 
   // Attività e Investimenti Senza Ticker (Fondi Pensione, Conti Deposito, TFR, ecc.)
   nonTickerTab: 'Attività Senza Ticker',
@@ -908,5 +927,15 @@ GainBusters nasce come un software **100% autogestito (Self-Hosted)**, pensato p
   selectProjectsPlaceholder: 'Seleziona o crea progetti...',
   timeframeCurrentMonth: 'Mese corr.',
   timeframePreviousMonth: 'Mese prec.',
-  projectsColumn: 'Progetti'
+  projectsColumn: 'Progetti',
+
+  // Quotes History & Verification
+  tabQuotesHistory: 'Registro & Storico Quotazioni',
+  quotesHistoryTitle: 'Registro e Verifica Storico Prezzi',
+  quotesHistoryDesc: 'Ispeziona ogni singola quotazione registrata per i vari strumenti e aggiorna o inserisci manualmente i prezzi.',
+  verifyQuotesBtn: 'Verifica Quotazioni',
+  manualQuoteTitle: 'Inserisci o Modifica Quotazione Manuale',
+  quoteDateLabel: 'Data Quotazione',
+  quotePriceLabel: 'Prezzo / Quotazione',
+  saveQuoteBtn: 'Salva Quotazione'
 };

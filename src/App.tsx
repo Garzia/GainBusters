@@ -5,7 +5,7 @@
 
 import React, { useState, useEffect, useRef, useMemo, useCallback } from 'react';
 import { translations } from './locales/index.ts';
-import { Currency, DBState, Account, Portfolio, Transaction, TransactionType, Transfer, InstrumentGroup, NonTickerEntity, NonTickerMovement } from './types.ts';
+import { Currency, DBState, Account, Portfolio, Transaction, TransactionType, Transfer, InstrumentGroup, NonTickerEntity, NonTickerMovement, TickerConfig } from './types.ts';
 import { encryptData, decryptData } from './utils/crypto.ts';
 import { saveFileHandleInIndexedDB, getFileHandleFromIndexedDB, clearFileHandleFromIndexedDB, getDatabaseStateFromIndexedDB } from './utils/indexedDB.ts';
 import { storageService } from './services/storageService.ts';
@@ -140,6 +140,7 @@ const defaultInitialDB: DBState = {
   transfers: [],
   otherCosts: [],
   instrumentGroups: [],
+  tickerConfigs: {},
   nonTickerEntities: [],
   nonTickerMovements: [],
   nonTickerMovementTypes: [],
@@ -207,6 +208,7 @@ export default function App() {
     transfers: [],
     otherCosts: [],
     instrumentGroups: [],
+    tickerConfigs: {},
     nonTickerEntities: [],
     nonTickerMovements: [],
     nonTickerMovementTypes: [],
@@ -235,6 +237,8 @@ export default function App() {
   const [dashFilter, setDashFilter] = useState<{ type: 'ALL' | 'ACCOUNT' | 'PORTFOLIO' | 'TICKER' | 'GROUP'; id: string }>({ type: 'ALL', id: '' });
   const [newCurrencyInput, setNewCurrencyInput] = useState<string>('');
   const [isGroupsModalOpen, setIsGroupsModalOpen] = useState<boolean>(false);
+  const [selectedTickerForModal, setSelectedTickerForModal] = useState<string | undefined>(undefined);
+  const [groupsModalInitialTab, setGroupsModalInitialTab] = useState<'tickers' | 'groups' | 'quotes'>('tickers');
   const [isAggregatedView, setIsAggregatedView] = useState<boolean>(() => {
     return db.settings?.aggregateInstrumentsView !== undefined ? !!db.settings.aggregateInstrumentsView : true;
   });
@@ -1098,9 +1102,11 @@ export default function App() {
           transfers: Array.isArray(loadedDb.transfers) ? loadedDb.transfers : [],
           otherCosts: Array.isArray(loadedDb.otherCosts) ? loadedDb.otherCosts : [],
           instrumentGroups: Array.isArray(loadedDb.instrumentGroups) ? loadedDb.instrumentGroups : [],
+          tickerConfigs: (loadedDb.tickerConfigs && typeof loadedDb.tickerConfigs === 'object') ? loadedDb.tickerConfigs : {},
           nonTickerEntities: Array.isArray(loadedDb.nonTickerEntities) ? loadedDb.nonTickerEntities : [],
           nonTickerMovements: Array.isArray(loadedDb.nonTickerMovements) ? loadedDb.nonTickerMovements : [],
           nonTickerMovementTypes: Array.isArray(loadedDb.nonTickerMovementTypes) ? loadedDb.nonTickerMovementTypes : [],
+          nonTickerProjects: Array.isArray(loadedDb.nonTickerProjects) ? loadedDb.nonTickerProjects : [],
           priceCache: (loadedDb.priceCache && typeof loadedDb.priceCache === 'object') ? loadedDb.priceCache : {}
         };
         lastPersistedDbJsonRef.current = JSON.stringify(fullDb);
@@ -1151,11 +1157,15 @@ export default function App() {
     setSyncFeedback({ message: t.connectionToYahoo, type: 'info' });
     try {
       const updatedDb = await syncPricesLocally(activeSymbols, force, stateObj);
-      if (!storageService.hasActiveSession()) return;
       const newPriceCache = updatedDb.priceCache || {};
+      const newConfigs = updatedDb.tickerConfigs || {};
       const current = dbRef.current || stateObj;
       const mergedDb: DBState = {
         ...current,
+        tickerConfigs: {
+          ...(current.tickerConfigs || {}),
+          ...newConfigs
+        },
         priceCache: {
           ...(current.priceCache || {}),
           ...newPriceCache
@@ -1782,6 +1792,70 @@ export default function App() {
     if (dashFilter.type === 'GROUP' && dashFilter.id === groupId) {
       setDashFilter({ type: 'ALL', id: '' });
     }
+    await saveDatabaseState(updatedDb);
+  };
+
+  const handleSaveTickerConfig = async (symbol: string, config: TickerConfig) => {
+    const sym = symbol.toUpperCase().trim();
+    const currentDb = dbRef.current || db;
+    const currentConfigs = currentDb.tickerConfigs || {};
+    const oldConfig = currentConfigs[sym];
+    const sourceChanged = oldConfig?.source !== config.source;
+
+    const updatedConfigs = {
+      ...currentConfigs,
+      [sym]: config
+    };
+
+    const updatedDb: DBState = {
+      ...currentDb,
+      tickerConfigs: updatedConfigs
+    };
+
+    await saveDatabaseState(updatedDb);
+
+    // If source is Lang & Schwarz or if the source changed, trigger price sync for this ticker immediately!
+    if (config.source === 'ls' || sourceChanged) {
+      await triggerPriceSync(updatedDb, true);
+    }
+  };
+
+  const handleSyncSingleTicker = async (symbol: string) => {
+    const currentDb = dbRef.current || db;
+    await triggerPriceSync(currentDb, true);
+  };
+
+  const handleUpdateSingleQuote = async (symbol: string, date: string, price: number) => {
+    const sym = symbol.toUpperCase().trim();
+    const currentDb = dbRef.current || db;
+    const currentCache = currentDb.priceCache || {};
+    const symQuotes = { ...(currentCache[sym] || {}) };
+    symQuotes[date] = price;
+
+    const updatedDb: DBState = {
+      ...currentDb,
+      priceCache: {
+        ...currentCache,
+        [sym]: symQuotes
+      }
+    };
+    await saveDatabaseState(updatedDb);
+  };
+
+  const handleDeleteSingleQuote = async (symbol: string, date: string) => {
+    const sym = symbol.toUpperCase().trim();
+    const currentDb = dbRef.current || db;
+    const currentCache = currentDb.priceCache || {};
+    const symQuotes = { ...(currentCache[sym] || {}) };
+    delete symQuotes[date];
+
+    const updatedDb: DBState = {
+      ...currentDb,
+      priceCache: {
+        ...currentCache,
+        [sym]: symQuotes
+      }
+    };
     await saveDatabaseState(updatedDb);
   };
 
@@ -3409,7 +3483,7 @@ export default function App() {
         if (typeof result === 'string') {
           const parsed = JSON.parse(result);
           // Basic validation
-          if (parsed && (parsed.settings || parsed.accounts || parsed.portfolios || parsed.transactions || parsed.transfers || parsed.otherCosts)) {
+          if (parsed && (parsed.settings || parsed.accounts || parsed.portfolios || parsed.transactions || parsed.transfers || parsed.otherCosts || parsed.tickerConfigs)) {
             setPendingImport(parsed);
           } else {
             alert(t.invalidBackupFile);
@@ -3462,9 +3536,11 @@ export default function App() {
       transfers: Array.isArray(pendingImport.transfers) ? pendingImport.transfers : [],
       otherCosts: Array.isArray(pendingImport.otherCosts) ? pendingImport.otherCosts : [],
       instrumentGroups: Array.isArray(pendingImport.instrumentGroups) ? pendingImport.instrumentGroups : [],
+      tickerConfigs: (pendingImport.tickerConfigs && typeof pendingImport.tickerConfigs === 'object') ? pendingImport.tickerConfigs : {},
       nonTickerEntities: Array.isArray(pendingImport.nonTickerEntities) ? pendingImport.nonTickerEntities : [],
       nonTickerMovements: Array.isArray(pendingImport.nonTickerMovements) ? pendingImport.nonTickerMovements : [],
       nonTickerMovementTypes: Array.isArray(pendingImport.nonTickerMovementTypes) ? pendingImport.nonTickerMovementTypes : [],
+      nonTickerProjects: Array.isArray(pendingImport.nonTickerProjects) ? pendingImport.nonTickerProjects : [],
       priceCache: (pendingImport.priceCache && typeof pendingImport.priceCache === 'object') ? pendingImport.priceCache : {}
     };
 
@@ -3499,9 +3575,11 @@ export default function App() {
       transfers: [...(currentDb.transfers || [])],
       otherCosts: [...(currentDb.otherCosts || [])],
       instrumentGroups: [...(currentDb.instrumentGroups || [])],
+      tickerConfigs: { ...(currentDb.tickerConfigs || {}) },
       nonTickerEntities: [...(currentDb.nonTickerEntities || [])],
       nonTickerMovements: [...(currentDb.nonTickerMovements || [])],
       nonTickerMovementTypes: [...(currentDb.nonTickerMovementTypes || [])],
+      nonTickerProjects: [...(currentDb.nonTickerProjects || [])],
       priceCache: JSON.parse(JSON.stringify(currentDb.priceCache || {}))
     };
 
@@ -3523,6 +3601,28 @@ export default function App() {
           newDb.nonTickerMovements![existingIdx] = ntm;
         } else {
           newDb.nonTickerMovements!.push(ntm);
+        }
+      });
+    }
+
+    if (pendingImport.nonTickerMovementTypes) {
+      pendingImport.nonTickerMovementTypes.forEach((nmt: any) => {
+        const existingIdx = (newDb.nonTickerMovementTypes || []).findIndex(ex => ex.id === nmt.id);
+        if (existingIdx >= 0) {
+          newDb.nonTickerMovementTypes![existingIdx] = nmt;
+        } else {
+          newDb.nonTickerMovementTypes!.push(nmt);
+        }
+      });
+    }
+
+    if (pendingImport.nonTickerProjects) {
+      pendingImport.nonTickerProjects.forEach((prj: any) => {
+        const existingIdx = (newDb.nonTickerProjects || []).findIndex(ex => ex.id === prj.id);
+        if (existingIdx >= 0) {
+          newDb.nonTickerProjects![existingIdx] = prj;
+        } else {
+          newDb.nonTickerProjects!.push(prj);
         }
       });
     }
@@ -3566,6 +3666,13 @@ export default function App() {
           newDb.instrumentGroups!.push(g);
         }
       });
+    }
+
+    if (pendingImport.tickerConfigs) {
+      newDb.tickerConfigs = {
+        ...(newDb.tickerConfigs || {}),
+        ...pendingImport.tickerConfigs
+      };
     }
 
     if (pendingImport.priceCache) {
@@ -3633,6 +3740,20 @@ export default function App() {
             >
               <RefreshCw className={`w-4 h-4 md:w-3.5 md:h-3.5 ${isSyncingPrices ? 'animate-spin' : ''}`} />
               <span className="hidden md:inline">{t.refreshPricesLabel}</span>
+            </button>
+
+            {/* Direct Quotes & Price Inspector Shortcut Button */}
+            <button
+              onClick={() => {
+                setSelectedTickerForModal(undefined);
+                setGroupsModalInitialTab('quotes');
+                setIsGroupsModalOpen(true);
+              }}
+              className="text-xs font-bold font-sans py-1.5 md:py-1 px-2 md:px-3 rounded-xl border border-slate-800 bg-slate-900/80 hover:bg-slate-850 text-slate-300 hover:text-white flex items-center gap-1.5 transition-all duration-300 cursor-pointer shadow-sm hover:border-slate-700"
+              title="Verifica e modifica manuale dello storico quotazioni salvate"
+            >
+              <Calendar className="w-4 h-4 md:w-3.5 md:h-3.5 text-sky-400" />
+              <span className="hidden xl:inline">Verifica Quotazioni</span>
             </button>
 
             {/* Syncing activity indicator */}
@@ -4196,9 +4317,24 @@ export default function App() {
                     }}
                     formatCurrency={formatCurrency}
                     instrumentGroups={db.instrumentGroups || []}
+                    tickerConfigs={db.tickerConfigs || {}}
                     isAggregatedView={isAggregatedView}
                     onToggleAggregatedView={handleToggleAggregatedView}
-                    onOpenGroupsManager={() => setIsGroupsModalOpen(true)}
+                    onOpenGroupsManager={() => {
+                      setSelectedTickerForModal(undefined);
+                      setGroupsModalInitialTab('groups');
+                      setIsGroupsModalOpen(true);
+                    }}
+                    onOpenTickerConfig={(sym) => {
+                      setSelectedTickerForModal(sym);
+                      setGroupsModalInitialTab('tickers');
+                      setIsGroupsModalOpen(true);
+                    }}
+                    onOpenQuotesHistory={(sym) => {
+                      setSelectedTickerForModal(sym);
+                      setGroupsModalInitialTab('quotes');
+                      setIsGroupsModalOpen(true);
+                    }}
                     onSelectGroup={(groupId) => {
                       setDashFilter({ type: 'GROUP', id: groupId });
                       window.scrollTo({ top: 0, behavior: 'smooth' });
@@ -4218,7 +4354,7 @@ export default function App() {
                   <p className="text-sm text-slate-400">{t.configureBrokersAssetsDesc}</p>
                 </div>
                 
-                <div className="flex gap-2">
+                <div className="flex flex-wrap gap-2">
                   <button
                     onClick={() => setAccountForm({ open: true, editId: null, name: '', currency: Currency.EUR, include: true })}
                     className="bg-emerald-600 hover:bg-emerald-500 text-white font-bold text-xs px-4 py-2.5 rounded-xl flex items-center gap-1.5 transition-all duration-300 transform hover:-translate-y-0.5 cursor-pointer shadow-lg shadow-emerald-950/20"
@@ -4233,6 +4369,19 @@ export default function App() {
                       <Plus className="w-4 h-4" /> {t.addPortfolio}
                     </button>
                   )}
+
+                  <button
+                    onClick={() => {
+                      setSelectedTickerForModal(undefined);
+                      setGroupsModalInitialTab('tickers');
+                      setIsGroupsModalOpen(true);
+                    }}
+                    className="bg-slate-800 hover:bg-slate-700 text-slate-200 font-bold text-xs px-4 py-2.5 rounded-xl flex items-center gap-1.5 transition-all duration-300 transform hover:-translate-y-0.5 cursor-pointer border border-slate-700/60 shadow-sm"
+                    title={t.instrumentManagementDesc || "Configura ISIN, fonti quotazioni e raggruppamenti"}
+                  >
+                    <Sliders className="w-4 h-4 text-emerald-400" />
+                    <span>{t.instrumentManagementTitle || 'Gestione Strumenti & Quotazioni'}</span>
+                  </button>
                 </div>
               </div>
 
@@ -5711,30 +5860,47 @@ export default function App() {
                     </div>
                   </div>
 
-                  {/* Instrument Groups Management */}
+                  {/* Instrument & Ticker Management */}
                   <div className="space-y-3 pt-3 border-t border-slate-800/80">
                     <div className="flex items-center justify-between">
                       <div>
                         <div className="text-white text-xs font-semibold flex items-center gap-1.5">
-                          <Layers className="w-3.5 h-3.5 text-emerald-400" />
-                          <span>{t.instrumentGroupsManagerTitle || 'Raggruppamento Strumenti'}</span>
+                          <Sliders className="w-3.5 h-3.5 text-emerald-400" />
+                          <span>{t.instrumentManagementTitle || 'Gestione Strumenti & Quotazioni'}</span>
                         </div>
                         <p className="text-[11px] text-slate-400 mt-0.5">
-                          {t.instrumentGroupsManagerDesc || 'Raggruppa manualmente ticker multipli dello stesso strumento (es. VWCE.MI e VWCE.DE)'}
+                          {t.instrumentManagementDesc || 'Configura ISIN e fonte quotazioni (Yahoo Finance o Lang & Schwarz) per ciascun ticker, e organizza i raggruppamenti multi-borsa.'}
                         </p>
                       </div>
                       <button
                         type="button"
-                        onClick={() => setIsGroupsModalOpen(true)}
+                        onClick={() => {
+                          setSelectedTickerForModal(undefined);
+                          setGroupsModalInitialTab('tickers');
+                          setIsGroupsModalOpen(true);
+                        }}
                         className="px-3 py-1.5 bg-emerald-500/10 hover:bg-emerald-500/20 text-emerald-400 border border-emerald-500/20 hover:border-emerald-500/30 rounded-xl text-xs font-bold transition flex items-center gap-1.5 cursor-pointer shrink-0"
                       >
                         <Sliders className="w-3.5 h-3.5" />
-                        <span>{t.manageGroups || 'Gestisci'} ({(db.instrumentGroups || []).length})</span>
+                        <span>{t.manageGroups || 'Gestisci'}</span>
                       </button>
                     </div>
 
-                    {(db.instrumentGroups || []).length > 0 && (
+                    {((db.instrumentGroups || []).length > 0 || Object.keys(db.tickerConfigs || {}).length > 0) && (
                       <div className="flex flex-wrap gap-2 pt-1">
+                        {Object.entries(db.tickerConfigs || {}).map(([sym, rawConf]) => {
+                          const conf = rawConf as TickerConfig;
+                          return (
+                            <div key={sym} className="px-2.5 py-1 bg-slate-950/80 border border-slate-800 rounded-lg text-xs flex items-center gap-1.5 font-mono">
+                              <span className="font-bold text-slate-200">{sym}</span>
+                              <span className={`text-[10px] px-1 py-0.2 rounded font-bold ${conf.source === 'ls' ? 'bg-amber-950 text-amber-300' : 'bg-slate-800 text-slate-400'}`}>
+                                {conf.source === 'ls' ? 'L&S' : 'Yahoo'}
+                              </span>
+                              {conf.isin && <span className="text-[10px] text-slate-500">({conf.isin})</span>}
+                              {conf.instrumentId && <span className="text-[10px] text-amber-400 font-bold">(ID #{conf.instrumentId})</span>}
+                            </div>
+                          );
+                        })}
                         {(db.instrumentGroups || []).map(g => (
                           <div key={g.id} className="px-2.5 py-1 bg-slate-950/80 border border-slate-800 rounded-lg text-xs flex items-center gap-1.5 font-mono">
                             <span className="font-bold text-slate-200">{g.name}</span>
@@ -5985,13 +6151,25 @@ export default function App() {
 
       <InstrumentGroupsModal
         isOpen={isGroupsModalOpen}
-        onClose={() => setIsGroupsModalOpen(false)}
+        onClose={() => {
+          setIsGroupsModalOpen(false);
+          setSelectedTickerForModal(undefined);
+        }}
         t={t}
         lang={lang}
         groups={db.instrumentGroups || []}
+        tickerConfigs={db.tickerConfigs || {}}
+        priceCache={db.priceCache || {}}
         allTransactions={db.transactions}
+        initialSelectedSymbol={selectedTickerForModal}
+        initialTab={groupsModalInitialTab}
+        currency={selectedCurrency}
         onSaveGroup={handleSaveInstrumentGroup}
         onDeleteGroup={handleDeleteInstrumentGroup}
+        onSaveTickerConfig={handleSaveTickerConfig}
+        onSyncTickerPrices={handleSyncSingleTicker}
+        onUpdateQuote={handleUpdateSingleQuote}
+        onDeleteQuote={handleDeleteSingleQuote}
       />
     </div>
   );

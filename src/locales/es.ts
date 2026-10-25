@@ -767,5 +767,24 @@ GainBusters se ha diseñado como una **aplicación 100% autohospedada, primero f
   noChartDataWarning: 'No hay suficientes datos temporales para trazar el gráfico.',
   statementValuationShort: 'Extracto de cuenta',
   capitalFlowShort: 'Flujo de capital',
-  investedShort: 'Aportado'
+  investedShort: 'Aportado',
+
+  // Gestione Strumenti & ISIN
+  instrumentManagementTitle: 'Gestión de Instrumentos y Cotizaciones',
+  instrumentManagementDesc: 'Configura el ISIN y la fuente de cotizaciones (Yahoo Finance o Lang & Schwarz) para cada ticker.',
+  tabTickerConfig: 'Configuración de Tickers (ISIN y Fuentes)',
+  tabGroups: 'Grupos Multi-Bolsa',
+  isinLabel: 'Código ISIN (International Securities Identification Number)',
+  isinPlaceholder: 'ej. IE00BK5BQT80',
+  quoteSourceLabel: 'Fuente de Cotizaciones',
+  sourceYahoo: 'Yahoo Finance (Predeterminada)',
+  sourceLS: 'Lang & Schwarz',
+  testAndFetchQuotes: 'Verificar y Actualizar',
+  saveTickerConfig: 'Guardar Configuración',
+  isinRequiredForLS: 'El ISIN es obligatorio para utilizar Lang & Schwarz.',
+  instrumentNotFoundLS: 'No se encontró ningún instrumento con este ISIN en Lang & Schwarz.',
+  quotesFetchedSuccessLS: '¡Cotizaciones recuperadas con éxito desde Lang & Schwarz!',
+  addTickerManualBtn: 'Nuevo Ticker',
+  allConfiguredTickers: 'Todos los Tickers',
+  defaultSourceNotice: 'Todos los instrumentos utilizan Yahoo Finance por defecto a menos que se elija Lang & Schwarz.'
 };

@@ -105,6 +105,14 @@ export interface InstrumentGroup {
   notes?: string;
 }
 
+export type QuoteSource = 'yahoo' | 'ls';
+
+export interface TickerConfig {
+  isin?: string;
+  source?: QuoteSource;
+  instrumentId?: number;
+}
+
 export enum NonTickerMovementType {
   DEPOSIT = 'DEPOSIT',
   EMPLOYEE_CONTRIBUTION = 'EMPLOYEE_CONTRIBUTION',
@@ -212,6 +220,7 @@ export interface DBState {
   transfers?: Transfer[];
   otherCosts?: OtherCost[];
   instrumentGroups?: InstrumentGroup[];
+  tickerConfigs?: { [symbol: string]: TickerConfig };
   nonTickerEntities?: NonTickerEntity[];
   nonTickerMovements?: NonTickerMovement[];
   nonTickerMovementTypes?: NonTickerMovementTypeConfig[];
@@ -1162,6 +1171,35 @@ export interface LanguagePhrases {
   noActiveProjectsMsg?: string;
   noArchivedProjectsMsg?: string;
   restoreBtn?: string;
+
+  // Instrument Management & ISIN/Quote Source Keys
+  instrumentManagementTitle?: string;
+  instrumentManagementDesc?: string;
+  tabTickerConfig?: string;
+  tabGroups?: string;
+  isinLabel?: string;
+  isinPlaceholder?: string;
+  quoteSourceLabel?: string;
+  sourceYahoo?: string;
+  sourceLS?: string;
+  testAndFetchQuotes?: string;
+  saveTickerConfig?: string;
+  isinRequiredForLS?: string;
+  instrumentNotFoundLS?: string;
+  quotesFetchedSuccessLS?: string;
+  addTickerManualBtn?: string;
+  allConfiguredTickers?: string;
+  defaultSourceNotice?: string;
+
+  // Quotes History & Manual Editing Keys (Cognitive Ergonomics)
+  tabQuotesHistory?: string;
+  quotesHistoryTitle?: string;
+  quotesHistoryDesc?: string;
+  verifyQuotesBtn?: string;
+  manualQuoteTitle?: string;
+  quoteDateLabel?: string;
+  quotePriceLabel?: string;
+  saveQuoteBtn?: string;
 }
 
 export interface TranslationDictionary {

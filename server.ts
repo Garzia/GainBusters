@@ -105,6 +105,7 @@ const initialDB = {
   transfers: [],
   otherCosts: [],
   instrumentGroups: [],
+  tickerConfigs: {},
   nonTickerEntities: [],
   nonTickerMovements: [],
   nonTickerMovementTypes: [],
@@ -141,9 +142,11 @@ function readDB() {
         transfers: Array.isArray(data.transfers) ? data.transfers : [],
         otherCosts: Array.isArray(data.otherCosts) ? data.otherCosts : [],
         instrumentGroups: Array.isArray(data.instrumentGroups) ? data.instrumentGroups : [],
+        tickerConfigs: (data.tickerConfigs && typeof data.tickerConfigs === 'object') ? data.tickerConfigs : {},
         nonTickerEntities: Array.isArray(data.nonTickerEntities) ? data.nonTickerEntities : [],
         nonTickerMovements: Array.isArray(data.nonTickerMovements) ? data.nonTickerMovements : [],
         nonTickerMovementTypes: Array.isArray(data.nonTickerMovementTypes) ? data.nonTickerMovementTypes : [],
+        nonTickerProjects: Array.isArray(data.nonTickerProjects) ? data.nonTickerProjects : [],
         priceCache: (data.priceCache && typeof data.priceCache === 'object') ? data.priceCache : {}
       };
       memoryDB = result;
@@ -290,6 +293,7 @@ app.post('/api/db', (req, res) => {
     transfers: Array.isArray(newDb.transfers) ? newDb.transfers : (currentDb.transfers || []),
     otherCosts: Array.isArray(newDb.otherCosts) ? newDb.otherCosts : (currentDb.otherCosts || []),
     instrumentGroups: Array.isArray(newDb.instrumentGroups) ? newDb.instrumentGroups : (currentDb.instrumentGroups || []),
+    tickerConfigs: (newDb.tickerConfigs && typeof newDb.tickerConfigs === 'object') ? newDb.tickerConfigs : (currentDb.tickerConfigs || {}),
     nonTickerEntities: Array.isArray(newDb.nonTickerEntities) ? newDb.nonTickerEntities : (currentDb.nonTickerEntities || []),
     nonTickerMovements: Array.isArray(newDb.nonTickerMovements) ? newDb.nonTickerMovements : (currentDb.nonTickerMovements || []),
     nonTickerMovementTypes: Array.isArray(newDb.nonTickerMovementTypes) ? newDb.nonTickerMovementTypes : (currentDb.nonTickerMovementTypes || []),
@@ -379,6 +383,17 @@ app.post('/api/db/instrumentGroups', (req, res) => {
   res.json({ success: true });
 });
 
+app.post('/api/db/tickerConfigs', (req, res) => {
+  const { tickerConfigs } = req.body;
+  if (!tickerConfigs || typeof tickerConfigs !== 'object') {
+    return res.status(400).json({ error: 'Invalid tickerConfigs object.' });
+  }
+  const db = readDB();
+  db.tickerConfigs = tickerConfigs;
+  writeDB(db);
+  res.json({ success: true });
+});
+
 // ================= STOCK & CRYPTO PRICE SYNC & TRACKING ENGINE =================
 
 // Proxy Yahoo Finance requests from the client to bypass CORS
@@ -425,6 +440,66 @@ app.get('/api/crypto/:pair', (req, res) => {
       res.setHeader('Content-Type', binanceRes.headers['content-type']);
     }
     binanceRes.pipe(res);
+  }).on('error', (err) => {
+    res.status(500).json({ error: err.message });
+  });
+});
+
+// Proxy Lang & Schwarz search request to bypass CORS
+app.get('/api/ls/search', (req, res) => {
+  const q = req.query.q as string;
+  const localeId = (req.query.localeId as string) || '1';
+  if (!q) {
+    return res.status(400).json({ error: 'Query parameter q is required' });
+  }
+  const url = `https://www.ls-tc.de/_rpc/json/.lstc/instrument/search/main?q=${encodeURIComponent(q)}&localeId=${encodeURIComponent(localeId)}`;
+
+  const options = {
+    headers: {
+      'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+      'Accept': 'application/json'
+    }
+  };
+
+  https.get(url, options, (lsRes) => {
+    res.status(lsRes.statusCode || 200);
+    if (lsRes.headers['content-type']) {
+      res.setHeader('Content-Type', lsRes.headers['content-type']);
+    }
+    lsRes.pipe(res);
+  }).on('error', (err) => {
+    res.status(500).json({ error: err.message });
+  });
+});
+
+// Proxy Lang & Schwarz chart data request to bypass CORS
+app.get('/api/ls/chart', (req, res) => {
+  const instrumentId = req.query.instrumentId as string;
+  const localeId = (req.query.localeId as string) || '1';
+  const container = (req.query.container as string) || 'chart1';
+  const marketId = (req.query.marketId as string) || '1';
+  const quotetype = (req.query.quotetype as string) || 'bid';
+  const series = (req.query.series as string) || 'intraday,history,flags';
+
+  if (!instrumentId) {
+    return res.status(400).json({ error: 'Query parameter instrumentId is required' });
+  }
+
+  const url = `https://www.ls-tc.de/_rpc/json/instrument/chart/dataForInstrument?container=${encodeURIComponent(container)}&instrumentId=${encodeURIComponent(instrumentId)}&marketId=${encodeURIComponent(marketId)}&quotetype=${encodeURIComponent(quotetype)}&series=${encodeURIComponent(series)}&type=&localeId=${encodeURIComponent(localeId)}`;
+
+  const options = {
+    headers: {
+      'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+      'Accept': 'application/json'
+    }
+  };
+
+  https.get(url, options, (lsRes) => {
+    res.status(lsRes.statusCode || 200);
+    if (lsRes.headers['content-type']) {
+      res.setHeader('Content-Type', lsRes.headers['content-type']);
+    }
+    lsRes.pipe(res);
   }).on('error', (err) => {
     res.status(500).json({ error: err.message });
   });

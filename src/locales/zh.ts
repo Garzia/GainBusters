@@ -767,5 +767,24 @@ GainBusters 被设计为一款 **100% 自托管、首重离线的本地应用**�
   noChartDataWarning: '历史时间数据不足以绘制图表。',
   statementValuationShort: '对账单记录',
   capitalFlowShort: '资金流水',
-  investedShort: '已投入'
+  investedShort: '已投入',
+
+  // Instruments & ISIN
+  instrumentManagementTitle: '标的资产与行情源管理',
+  instrumentManagementDesc: '为各代码配置 ISIN 和行情来源（Yahoo Finance 或 Lang & Schwarz），并管理跨交易所组合。',
+  tabTickerConfig: '代码配置 (ISIN 与行情源)',
+  tabGroups: '跨交易所标的组合',
+  isinLabel: 'ISIN 代码 (国际证券识别码)',
+  isinPlaceholder: '例如：IE00BK5BQT80',
+  quoteSourceLabel: '行情数据源',
+  sourceYahoo: 'Yahoo Finance (默认)',
+  sourceLS: 'Lang & Schwarz',
+  testAndFetchQuotes: '验证并同步',
+  saveTickerConfig: '保存配置',
+  isinRequiredForLS: '使用 Lang & Schwarz 作为行情源时必须提供 ISIN。',
+  instrumentNotFoundLS: '在 Lang & Schwarz 未找到该 ISIN 对应的标的。',
+  quotesFetchedSuccessLS: '成功从 Lang & Schwarz 获取行情数据！',
+  addTickerManualBtn: '新增代码',
+  allConfiguredTickers: '全部代码',
+  defaultSourceNotice: '除明确选择 Lang & Schwarz 外，所有标的均默认使用 Yahoo Finance。'
 };

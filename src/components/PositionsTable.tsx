@@ -4,7 +4,7 @@
  */
 
 import React, { useState, useMemo } from 'react';
-import { LanguagePhrases, Portfolio, InstrumentGroup } from '../types.ts';
+import { LanguagePhrases, Portfolio, InstrumentGroup, TickerConfig } from '../types.ts';
 import { TickerMetric, PortfolioLot, buildAggregatedPositions, AggregatedTickerPosition } from '../utils/finance.ts';
 import { formatDateString } from '../utils.ts';
 import { QuantityDisplay } from './QuantityDisplay';
@@ -22,7 +22,8 @@ import {
   Sparkles,
   PieChart,
   Tag,
-  Plus
+  Plus,
+  Calendar
 } from 'lucide-react';
 
 interface PositionsTableProps {
@@ -36,9 +37,12 @@ interface PositionsTableProps {
   onSelectTicker?: (symbol: string) => void;
   formatCurrency: (val: number, curr?: string) => string;
   instrumentGroups?: InstrumentGroup[];
+  tickerConfigs?: { [symbol: string]: TickerConfig };
   isAggregatedView?: boolean;
   onToggleAggregatedView?: () => void;
   onOpenGroupsManager?: () => void;
+  onOpenTickerConfig?: (symbol: string) => void;
+  onOpenQuotesHistory?: (symbol: string) => void;
   onSelectGroup?: (groupId: string) => void;
 }
 
@@ -56,9 +60,12 @@ export const PositionsTable: React.FC<PositionsTableProps> = ({
   onSelectTicker,
   formatCurrency,
   instrumentGroups = [],
+  tickerConfigs = {},
   isAggregatedView = false,
   onToggleAggregatedView,
   onOpenGroupsManager,
+  onOpenTickerConfig,
+  onOpenQuotesHistory,
   onSelectGroup
 }) => {
   const [searchTerm, setSearchTerm] = useState('');
@@ -203,16 +210,16 @@ export const PositionsTable: React.FC<PositionsTableProps> = ({
             </button>
           )}
 
-          {/* Manage Groups Button */}
+          {/* Manage Instruments & Groups Button */}
           {onOpenGroupsManager && (
             <button
               type="button"
               onClick={onOpenGroupsManager}
               className="px-2.5 py-1.5 rounded-xl bg-slate-950/80 border border-slate-800 text-slate-300 hover:text-white hover:bg-slate-900 transition-all cursor-pointer flex items-center gap-1.5 text-xs font-medium"
-              title="Crea, modifica o elimina raggruppamenti di ticker multi-borsa"
+              title="Gestisci strumenti, ISIN, fonti quotazioni e raggruppamenti"
             >
               <Plus className="w-3.5 h-3.5 text-emerald-400" />
-              <span className="hidden sm:inline">{t.manageGroupsBtn || 'Gestisci Gruppi'}</span>
+              <span className="hidden sm:inline">{t.instrumentManagementTitle || t.manageGroupsBtn || 'Gestisci Strumenti'}</span>
               {instrumentGroups && instrumentGroups.length > 0 && (
                 <span className="px-1.5 py-0.2 text-[10px] rounded-full bg-slate-800 text-emerald-400 font-mono font-bold border border-slate-700">
                   {instrumentGroups.length}
@@ -379,6 +386,27 @@ export const PositionsTable: React.FC<PositionsTableProps> = ({
                           <div>
                             <div className="font-bold text-white group-hover:text-emerald-400 transition-colors flex items-center gap-1.5 flex-wrap">
                               <span>{pos.symbol}</span>
+                              {!pos.isGroup && (() => {
+                                const symConf = (tickerConfigs && pos.symbol ? (tickerConfigs[pos.symbol] || tickerConfigs[pos.symbol.toUpperCase()]) : undefined);
+                                const isLS = symConf?.source === 'ls';
+                                return (
+                                  <button
+                                    type="button"
+                                    onClick={(e) => {
+                                      e.stopPropagation();
+                                      if (onOpenTickerConfig) onOpenTickerConfig(pos.symbol);
+                                    }}
+                                    className={`text-[9px] font-mono font-bold px-1.5 py-0.2 rounded border transition cursor-pointer ${
+                                      isLS
+                                        ? 'bg-amber-500/15 text-amber-300 border-amber-500/30 hover:bg-amber-500/25'
+                                        : 'bg-slate-800 text-slate-400 border-slate-700/60 hover:text-white hover:bg-slate-700'
+                                    }`}
+                                    title={`Fonte: ${isLS ? 'Lang & Schwarz' : 'Yahoo Finance'}${symConf?.isin ? ` (ISIN: ${symConf.isin}${symConf.instrumentId ? ` - ID #${symConf.instrumentId}` : ''})` : ''} - Clicca per configurare`}
+                                  >
+                                    {isLS ? 'L&S' : 'Yahoo'}
+                                  </button>
+                                );
+                              })()}
                               {pos.isGroup && (
                                 <span className="text-[9px] bg-emerald-500/15 text-emerald-300 border border-emerald-500/30 px-1.5 py-0.2 rounded font-semibold uppercase tracking-wider">
                                   {t.aggregatedBadge || 'Aggregato'}
@@ -415,7 +443,22 @@ export const PositionsTable: React.FC<PositionsTableProps> = ({
 
                       {/* Current Unit Price with Daily Change */}
                       <td className="py-3 px-3 text-right text-slate-300">
-                        <div>{formatCurrency(pos.todayPriceInDisplay, selectedCurrency)}</div>
+                        <div className="flex items-center justify-end gap-1.5">
+                          <span>{formatCurrency(pos.todayPriceInDisplay, selectedCurrency)}</span>
+                          {onOpenQuotesHistory && !pos.isGroup && (
+                            <button
+                              type="button"
+                              onClick={(e) => {
+                                e.stopPropagation();
+                                onOpenQuotesHistory(pos.symbol);
+                              }}
+                              className="p-1 rounded text-slate-500 hover:text-sky-400 hover:bg-slate-800 transition cursor-pointer"
+                              title={`Verifica e modifica storico quotazioni per ${pos.symbol}`}
+                            >
+                              <Calendar className="w-3.5 h-3.5" />
+                            </button>
+                          )}
+                        </div>
                         <div className={`text-[10px] font-bold tracking-tight ${pos.dailyChangePct >= 0 ? 'text-emerald-400' : 'text-rose-400'}`}>
                           {pos.dailyChangePct >= 0 ? '▲ +' : '▼ '}{pos.dailyChangePct.toFixed(2)}%
                         </div>
