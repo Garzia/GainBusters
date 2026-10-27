@@ -144,6 +144,7 @@ const defaultInitialDB: DBState = {
   nonTickerEntities: [],
   nonTickerMovements: [],
   nonTickerMovementTypes: [],
+  nonTickerProjects: [],
   priceCache: {}
 };
 
@@ -212,6 +213,7 @@ export default function App() {
     nonTickerEntities: [],
     nonTickerMovements: [],
     nonTickerMovementTypes: [],
+    nonTickerProjects: [],
     priceCache: {}
   });
 
@@ -914,7 +916,12 @@ export default function App() {
       if (!mergedSettings.inflationIndices || mergedSettings.inflationIndices.length === 0) {
         mergedSettings.inflationIndices = defaultInitialDB.settings.inflationIndices;
       }
-      const fullDb = { ...defaultInitialDB, ...decryptedDb, settings: mergedSettings };
+      const fullDb = {
+        ...defaultInitialDB,
+        ...decryptedDb,
+        settings: mergedSettings,
+        nonTickerProjects: Array.isArray(decryptedDb.nonTickerProjects) ? decryptedDb.nonTickerProjects : []
+      };
       
       // Purge previous storage caches before switching to new file
       await storageService.purgeStorageCache();
@@ -980,7 +987,12 @@ export default function App() {
       if (!mergedSettings.inflationIndices || mergedSettings.inflationIndices.length === 0) {
         mergedSettings.inflationIndices = defaultInitialDB.settings.inflationIndices;
       }
-      const fullDb = { ...defaultInitialDB, ...loadedDb, settings: mergedSettings };
+      const fullDb = {
+        ...defaultInitialDB,
+        ...loadedDb,
+        settings: mergedSettings,
+        nonTickerProjects: Array.isArray(loadedDb.nonTickerProjects) ? loadedDb.nonTickerProjects : []
+      };
 
       setBrowserPassword(passwordInput);
       lastPersistedDbJsonRef.current = JSON.stringify(fullDb);

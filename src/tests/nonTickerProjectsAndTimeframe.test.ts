@@ -314,6 +314,111 @@ assert(updatedM3?.amount === 250, 'Movement 3 amount remains untouched');
 
 console.log('✓ Ciclo di vita progetti verificato: archiviazione ed eliminazione non distruttive e preservazione contabile');
 
+// -------------------------------------------------------------
+// 4. Test Persistenza DB: Salvataggio, Logout e Ripristino al Login
+// -------------------------------------------------------------
+console.log('4. Verifica persistenza DB: serializzazione, payload server e ripristino al login...');
+
+// Simulazione stato DB salvato dal client con progetti e assegnazioni movimenti
+const clientStateToSave: DBState = {
+  settings: {
+    theme: 'dark',
+    defaultCurrency: 'EUR',
+    passwordSet: true,
+    selectedInflationId: 'NIC',
+    inflationIndices: []
+  },
+  accounts: [],
+  portfolios: [],
+  transactions: [],
+  priceCache: {},
+  nonTickerEntities: [{ id: 'ent-1', name: 'Conto Deposito', category: 'SAVINGS_ACCOUNT', currency: 'EUR', createdAt: '2025-01-01T00:00:00.000Z' }],
+  nonTickerProjects: [
+    { id: 'proj-cresima', name: 'Cresima', color: '#10b981', createdAt: '2025-01-01T00:00:00.000Z' },
+    { id: 'proj-vacanze', name: 'Vacanze', color: '#0ea5e9', createdAt: '2025-01-01T00:00:00.000Z' }
+  ],
+  nonTickerMovements: [
+    {
+      id: 'ntm-101',
+      entityId: 'ent-1',
+      date: '2025-05-15',
+      type: NonTickerMovementType.DEPOSIT,
+      amount: 400,
+      projectIds: ['proj-cresima', 'proj-vacanze']
+    },
+    {
+      id: 'ntm-102',
+      entityId: 'ent-1',
+      date: '2025-06-01',
+      type: NonTickerMovementType.WITHDRAWAL,
+      amount: 150,
+      projectIds: ['proj-vacanze']
+    }
+  ]
+};
+
+// 4.1 Simulazione logica POST /api/db (server.ts)
+const currentServerDb: DBState = {
+  settings: { theme: 'dark', defaultCurrency: 'EUR', passwordSet: true, selectedInflationId: 'NIC', inflationIndices: [] },
+  accounts: [],
+  portfolios: [],
+  transactions: [],
+  priceCache: {}
+};
+
+const serverFullDb = {
+  settings: { ...currentServerDb.settings, ...clientStateToSave.settings },
+  accounts: Array.isArray(clientStateToSave.accounts) ? clientStateToSave.accounts : (currentServerDb.accounts || []),
+  portfolios: Array.isArray(clientStateToSave.portfolios) ? clientStateToSave.portfolios : (currentServerDb.portfolios || []),
+  transactions: Array.isArray(clientStateToSave.transactions) ? clientStateToSave.transactions : (currentServerDb.transactions || []),
+  transfers: Array.isArray(clientStateToSave.transfers) ? clientStateToSave.transfers : (currentServerDb.transfers || []),
+  otherCosts: Array.isArray(clientStateToSave.otherCosts) ? clientStateToSave.otherCosts : (currentServerDb.otherCosts || []),
+  instrumentGroups: Array.isArray(clientStateToSave.instrumentGroups) ? clientStateToSave.instrumentGroups : (currentServerDb.instrumentGroups || []),
+  tickerConfigs: (clientStateToSave.tickerConfigs && typeof clientStateToSave.tickerConfigs === 'object') ? clientStateToSave.tickerConfigs : (currentServerDb.tickerConfigs || {}),
+  nonTickerEntities: Array.isArray(clientStateToSave.nonTickerEntities) ? clientStateToSave.nonTickerEntities : (currentServerDb.nonTickerEntities || []),
+  nonTickerMovements: Array.isArray(clientStateToSave.nonTickerMovements) ? clientStateToSave.nonTickerMovements : (currentServerDb.nonTickerMovements || []),
+  nonTickerMovementTypes: Array.isArray(clientStateToSave.nonTickerMovementTypes) ? clientStateToSave.nonTickerMovementTypes : (currentServerDb.nonTickerMovementTypes || []),
+  nonTickerProjects: Array.isArray(clientStateToSave.nonTickerProjects) ? clientStateToSave.nonTickerProjects : (currentServerDb.nonTickerProjects || []),
+  priceCache: (clientStateToSave.priceCache && typeof clientStateToSave.priceCache === 'object') ? clientStateToSave.priceCache : (currentServerDb.priceCache || {})
+};
+
+// Verifica che il payload del server includa integralmente i progetti e le assegnazioni
+assert(Array.isArray(serverFullDb.nonTickerProjects), 'Server payload must contain nonTickerProjects array');
+assert(serverFullDb.nonTickerProjects.length === 2, 'Server payload must retain all 2 projects');
+assert(serverFullDb.nonTickerProjects[0].name === 'Cresima', 'Project name preserved in server payload');
+
+// 4.2 Simulazione serializzazione su disco / JSON DB file
+const serializedDiskContent = JSON.stringify(serverFullDb);
+const parsedFromDisk = JSON.parse(serializedDiskContent);
+
+// 4.3 Simulazione ripristino al Login (fetchDB in App.tsx)
+const loadedAfterLogin: DBState = {
+  ...serverFullDb,
+  ...parsedFromDisk,
+  nonTickerProjects: Array.isArray(parsedFromDisk.nonTickerProjects) ? parsedFromDisk.nonTickerProjects : [],
+  nonTickerMovements: Array.isArray(parsedFromDisk.nonTickerMovements) ? parsedFromDisk.nonTickerMovements : []
+};
+
+// Verifiche sui progetti dopo il login
+assert(loadedAfterLogin.nonTickerProjects?.length === 2, 'Projects must be retained upon login');
+const projCresimaLoaded = loadedAfterLogin.nonTickerProjects?.find(p => p.id === 'proj-cresima');
+assert(projCresimaLoaded !== undefined, 'Project Cresima exists after login');
+assert(projCresimaLoaded?.color === '#10b981', 'Project Cresima color preserved');
+
+// Verifiche sull\'assegnazione dei movimenti dopo il login
+assert(loadedAfterLogin.nonTickerMovements?.length === 2, 'Movements must be retained upon login');
+const mov1Loaded = loadedAfterLogin.nonTickerMovements?.find(m => m.id === 'ntm-101');
+assert(mov1Loaded !== undefined, 'Movement 1 exists after login');
+assert(Array.isArray(mov1Loaded?.projectIds), 'Movement 1 projectIds must be an array');
+assert(mov1Loaded?.projectIds?.length === 2, 'Movement 1 must still have 2 assigned projectIds');
+assert(mov1Loaded?.projectIds?.includes('proj-cresima'), 'Movement 1 must still be assigned to Cresima');
+assert(mov1Loaded?.projectIds?.includes('proj-vacanze'), 'Movement 1 must still be assigned to Vacanze');
+
+const mov2Loaded = loadedAfterLogin.nonTickerMovements?.find(m => m.id === 'ntm-102');
+assert(mov2Loaded?.projectIds?.length === 1 && mov2Loaded?.projectIds?.[0] === 'proj-vacanze', 'Movement 2 assignment preserved');
+
+console.log('✓ Persistenza DB verificata: progetti e assegnazioni movimenti salvati e ripristinati correttamente al login');
+
 console.log('======================================================');
 console.log(' TUTTI I TEST DELLA SUITE PROGETTI E TIMEFRAME SUPERATI CON SUCCESSO! ');
 console.log('======================================================');

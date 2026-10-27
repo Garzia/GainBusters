@@ -109,6 +109,7 @@ const initialDB = {
   nonTickerEntities: [],
   nonTickerMovements: [],
   nonTickerMovementTypes: [],
+  nonTickerProjects: [],
   priceCache: {}
 };
 
@@ -297,6 +298,7 @@ app.post('/api/db', (req, res) => {
     nonTickerEntities: Array.isArray(newDb.nonTickerEntities) ? newDb.nonTickerEntities : (currentDb.nonTickerEntities || []),
     nonTickerMovements: Array.isArray(newDb.nonTickerMovements) ? newDb.nonTickerMovements : (currentDb.nonTickerMovements || []),
     nonTickerMovementTypes: Array.isArray(newDb.nonTickerMovementTypes) ? newDb.nonTickerMovementTypes : (currentDb.nonTickerMovementTypes || []),
+    nonTickerProjects: Array.isArray(newDb.nonTickerProjects) ? newDb.nonTickerProjects : (currentDb.nonTickerProjects || []),
     priceCache: (newDb.priceCache && typeof newDb.priceCache === 'object') ? newDb.priceCache : (currentDb.priceCache || {})
   };
   writeDB(fullDb);
@@ -390,6 +392,28 @@ app.post('/api/db/tickerConfigs', (req, res) => {
   }
   const db = readDB();
   db.tickerConfigs = tickerConfigs;
+  writeDB(db);
+  res.json({ success: true });
+});
+
+app.post('/api/db/nonTickerProjects', (req, res) => {
+  const { nonTickerProjects } = req.body;
+  if (!Array.isArray(nonTickerProjects)) {
+    return res.status(400).json({ error: 'Invalid nonTickerProjects list.' });
+  }
+  const db = readDB();
+  db.nonTickerProjects = nonTickerProjects;
+  writeDB(db);
+  res.json({ success: true });
+});
+
+app.post('/api/db/nonTickerMovements', (req, res) => {
+  const { nonTickerMovements } = req.body;
+  if (!Array.isArray(nonTickerMovements)) {
+    return res.status(400).json({ error: 'Invalid nonTickerMovements list.' });
+  }
+  const db = readDB();
+  db.nonTickerMovements = nonTickerMovements;
   writeDB(db);
   res.json({ success: true });
 });
